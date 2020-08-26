@@ -10,6 +10,7 @@ Each of these functions will have their deck build sectioned off as the followin
 package four_souls
 
 import (
+	"errors"
 	"math/rand"
 	"time"
 )
@@ -136,7 +137,7 @@ type card interface {
 // recharge at the start of the player's next turn.
 type activeCards interface {
 	card
-	activate(p *player, b *Board)
+	activate(p *player, b *Board) error
 	recharge()
 }
 
@@ -173,87 +174,139 @@ type passiveItem interface {
 	trigger(p *player, b *Board)
 }
 
-func (c *characterCard) activate(p *player, b *Board) {
+func (c *characterCard) activate(p *player, b *Board) error {
 	c.triggered = true
+	return nil
 }
 
-// Activate an active / paid item and push their effect to the
-// event stack.
-// Active Items can only be used once until the start
-// of the owner's next turn.
-func (t *treasureCard) activate(p *player, b *Board) {
-	if t.active {
-		t.triggered = true
+// Activate the Treasure card by invoking it's activator, provided the
+// conditions are met.
+// For items that can be tapped: tap the card, then activate the effect
+// For items that need a paid cost: pay the cost, then activate the effect
+// If the card could not be activated (couldn't pay the initial cost
+// or conditions are not met), this function will
+// return an error detailing what happened.
+func (tc *treasureCard) activate(p *player, b *Board) error {
+	var err = errors.New("not a card that can be activated")
+	e := activateEvent{c: tc}
+	if tc.active {
+		var f cardEffect
+		var specialCondition bool
+		if f, specialCondition, err = tc.f(p, b, tc); err == nil {
+			tc.triggered = tc.active
+			if specialCondition && tc.id == guppysPaw {
+				defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 1}})
+			} else if specialCondition && (tc.id == theBone || tc.id == techX) { // specialCondition = paid event used
+				tc.triggered = false
+			} else if specialCondition {
+				defer b.rollDiceAndPush()
+			}
+			e.f = f
+			b.eventStack.push(event{p: p, e: e})
+		}
 	}
+	return err
+}
+
+// Play a loot card from the hand and invoke it's activator.
+// If played card is a trinket, then it will add the trinket to the game
+// If not, activate its effect, then discard the card
+func (lc lootCard) activate(p *player, b *Board) error {
+	var i uint8
+	var err error
+	if i, err = p.getHandCardIndexById(lc.id); err == nil {
+		e := lootCardEvent{l: lc}
+		if lc.trinket {
+			e.f = func(roll uint8, blankCard bool) {}
+			p.addCardToBoard(lc)
+		} else {
+			var f lootCardEffect
+			var specialCondition bool
+			f, specialCondition, err = lc.f(p, b)
+			if err == nil {
+				if specialCondition && lc.id != temperance {
+					defer b.rollDiceAndPush()
+				} else if !specialCondition && lc.id == temperance {
+					defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 1}})
+				} else if specialCondition && lc.id == temperance {
+					defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 2}})
+				}
+				e.f = f
+				b.discard(p.popHandCard(i))
+				b.eventStack.push(event{p: p, e: e})
+			}
+		}
+	}
+	return err
 }
 
 // Trigger the cards without activating their effects.
-func (t *treasureCard) deathPenalty() {
-	t.triggered = true
+func (tc *treasureCard) deathPenalty() {
+	tc.triggered = true
 }
 
 func (p *player) decreaseAP(n uint8) {
-	p.Character.ap = subtract(p.Character.ap, n)
+	p.Character.ap = subtractUint8(p.Character.ap, n)
 }
 
 func (m *monsterCard) decreaseAP(n uint8) {
-	m.ap = subtract(m.ap, n)
+	m.ap = subtractUint8(m.ap, n)
 }
 
 func (p *player) decreaseBaseAttack(n uint8) {
-	p.Character.baseAttack = subtract(p.Character.baseAttack, n)
+	p.Character.baseAttack = subtractUint8(p.Character.baseAttack, n)
 }
 
 func (m *monsterCard) decreaseBaseAttack(n uint8) {
-	m.baseAttack = subtract(m.baseAttack, n)
+	m.baseAttack = subtractUint8(m.baseAttack, n)
 }
 
 func (p *player) decreaseBaseHealth(n uint8) {
-	p.Character.baseHealth = subtract(p.Character.baseHealth, n)
+	p.Character.baseHealth = subtractUint8(p.Character.baseHealth, n)
 }
 
 func (m *monsterCard) decreaseBaseHealth(n uint8) {
-	m.baseHealth = subtract(m.baseHealth, n)
+	m.baseHealth = subtractUint8(m.baseHealth, n)
 }
 
 func (p *player) decreaseHP(n uint8) {
-	p.Character.hp = subtract(p.Character.hp, n)
+	p.Character.hp = subtractUint8(p.Character.hp, n)
 }
 
 func (m *monsterCard) decreaseHP(n uint8) {
-	m.hp = subtract(m.hp, n)
+	m.hp = subtractUint8(m.hp, n)
 }
 
-func (l lootCard) getContinuousPassive() continuousActivator {
-	return l.cf
+func (lc lootCard) getContinuousPassive() continuousActivator {
+	return lc.cf
 }
 
 func (m monsterCard) getContinuousPassive() continuousActivator {
 	return m.cf
 }
 
-func (t treasureCard) getContinuousPassive() continuousActivator {
-	return t.cf
+func (tc treasureCard) getContinuousPassive() continuousActivator {
+	return tc.cf
 }
 
-func (l lootCard) getCounters() int8 {
+func (lc lootCard) getCounters() int8 {
 	return 0
 }
 
-func (t treasureCard) getCounters() int8 {
-	return t.counters
+func (tc treasureCard) getCounters() int8 {
+	return tc.counters
 }
 
-func (l lootCard) getEventPassive() eventActivator {
-	return l.ef
+func (lc lootCard) getEventPassive() eventActivator {
+	return lc.ef
 }
 
 func (m monsterCard) getEventPassive() eventActivator {
 	return m.ef
 }
 
-func (t treasureCard) getEventPassive() eventActivator {
-	return t.ef
+func (tc treasureCard) getEventPassive() eventActivator {
+	return tc.ef
 }
 
 func (p player) getId() uint16 {
@@ -264,16 +317,16 @@ func (c characterCard) getId() uint16 {
 	return c.id
 }
 
-func (l lootCard) getId() uint16 {
-	return l.id
+func (lc lootCard) getId() uint16 {
+	return lc.id
 }
 
 func (m monsterCard) getId() uint16 {
 	return m.id
 }
 
-func (t treasureCard) getId() uint16 {
-	return t.id
+func (tc treasureCard) getId() uint16 {
+	return tc.id
 }
 
 func (p player) getName() string {
@@ -284,16 +337,16 @@ func (c characterCard) getName() string {
 	return c.name
 }
 
-func (l lootCard) getName() string {
-	return l.name
+func (lc lootCard) getName() string {
+	return lc.name
 }
 
 func (m monsterCard) getName() string {
 	return m.name
 }
 
-func (t treasureCard) getName() string {
-	return t.name
+func (tc treasureCard) getName() string {
+	return tc.name
 }
 
 func (p *player) increaseAP(n uint8) {
@@ -352,24 +405,24 @@ func (m monsterCard) isDead() bool {
 	return isDead
 }
 
-func (l lootCard) isEternal() bool {
-	return l.eternal
+func (lc lootCard) isEternal() bool {
+	return lc.eternal
 }
 
-func (t treasureCard) isEternal() bool {
-	return t.eternal
+func (tc treasureCard) isEternal() bool {
+	return tc.eternal
 }
 
-func (l lootCard) isPassive() bool {
+func (lc lootCard) isPassive() bool {
 	var isPassive bool
-	if l.trinket {
+	if lc.trinket {
 		isPassive = true
 	}
 	return isPassive
 }
 
-func (t treasureCard) isPassive() bool {
-	return t.passive
+func (tc treasureCard) isPassive() bool {
+	return tc.passive
 }
 
 func (m *monsterCard) heal(n uint8) {
@@ -394,8 +447,8 @@ func (p *player) heal(n uint8) {
 	}
 }
 
-func (t *treasureCard) loseCounters(n int8) {
-	x := int8(t.counters) - n
+func (tc *treasureCard) loseCounters(n int8) {
+	x := int8(tc.counters) - n
 	if x < 0 {
 		x = 0
 	}
@@ -411,13 +464,13 @@ func (c *characterCard) recharge() {
 	c.triggered = false
 }
 
-func (t *treasureCard) recharge() {
-	t.triggered = false
+func (tc *treasureCard) recharge() {
+	tc.triggered = false
 }
 
-func (l lootCard) trigger(p *player, b *Board) {}
+func (lc lootCard) trigger(p *player, b *Board) {}
 
-func (t *treasureCard) trigger(p *player, b *Board) {}
+func (tc *treasureCard) trigger(p *player, b *Board) {}
 
 // Initialize the characters and return only the number of characters that is required to play the game.
 func getCharacters(numPlayers uint8, useExpansionOne bool, useExpansionTwo bool) []characterCard {
@@ -998,7 +1051,7 @@ func getTreasureCards(useExpansionOne bool, useExpansionTwo bool) deck {
 		treasureCard{baseCard: baseCard{name: "The Chest", id: theChest}, passive: true, cf: theChestFunc},
 		treasureCard{baseCard: baseCard{name: "The Compass", id: theCompass}, passive: true, ef: theCompassFunc},
 		treasureCard{baseCard: baseCard{name: "The D10", id: theD10}, passive: true, ef: theD10Func},
-		treasureCard{baseCard: baseCard{name: "The Dead Cat", id: theDeadCat}, passive: true, ef: theDeadCatFuncEvent, cf: theDeadCatFuncConstant},
+		treasureCard{baseCard: baseCard{name: "The Dead Cat", id: theDeadCat}, passive: true, cf: theDeadCatFuncConstant},
 		treasureCard{baseCard: baseCard{name: "The Habit", id: theHabit}, passive: true, ef: theHabitFuncEvent, cf: theHabitFuncConstant},
 		treasureCard{baseCard: baseCard{name: "The Map", id: theMap}, passive: true, ef: theMapFunc},
 		treasureCard{baseCard: baseCard{name: "The Midas Touch", id: theMidasTouch}, passive: true}, // no function need be assigned

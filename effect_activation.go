@@ -38,12 +38,11 @@ func (b *Board) activateActiveItem(p *player, tc *treasureCard) error {
 	if tc.active {
 		var f cardEffect
 		var specialCondition bool
-		f, specialCondition, err = tc.f(p, b, tc)
-		if err == nil {
-			tc.triggered = true
+		if f, specialCondition, err = tc.f(p, b, tc); err == nil {
+			tc.triggered = tc.active
 			if specialCondition && tc.id == guppysPaw {
 				defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 1}})
-			} else if specialCondition && (tc.id == theBone || tc.id == techX) {
+			} else if specialCondition && (tc.id == theBone || tc.id == techX) { // specialCondition = paid event used
 				tc.triggered = false
 			} else if specialCondition {
 				defer b.rollDiceAndPush()
@@ -57,18 +56,14 @@ func (b *Board) activateActiveItem(p *player, tc *treasureCard) error {
 
 func (b *Board) eventDependentPassiveActivation(p *player, e *eventNode) []event {
 	triggeredEvents := make([]event, 0, len(p.PassiveItems)*2)
-	skip := map[uint16]struct{}{brokenAnkh: {}, guppysHairball: {}, theDeadCat: {},
-		guppysCollar: {}, oneUp: {}} // These have preventative effects, not reactive. Skip
 	for i := range p.PassiveItems {
 		var ic itemCard = p.PassiveItems[i]
 		if ef := ic.getEventPassive(); ef != nil {
 			if f, specialCond, err := ef(p, b, ic, e); err == nil {
-				if _, ok := skip[ic.getId()]; !ok {
-					triggeredEvents = append(triggeredEvents, event{p: p, e: triggeredEffectEvent{c: ic, f: f}})
-					if specialCond {
-						e, _ := b.rollDice()
-						triggeredEvents = append(triggeredEvents, event{p: p, e: e})
-					}
+				triggeredEvents = append(triggeredEvents, event{p: p, e: triggeredEffectEvent{c: ic, f: f}})
+				if specialCond {
+					e, _ := b.rollDice()
+					triggeredEvents = append(triggeredEvents, event{p: p, e: e})
 				}
 			}
 		}

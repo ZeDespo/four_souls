@@ -239,29 +239,6 @@ func butterBeanFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 	return f, false, err
 }
 
-//// Trinket
-//// Each time you gain cents, gain an additional 1 cent.
-//// This function will only be called
-//func counterfeitPennyFunc(p *player, b *Board) (lootCardEffect, bool, error) {
-//	p.activeEffects[counterfeitPenny] = struct{}{}
-//}
-//
-//func counterfeitPennyOnLeaveFunc(p *player, b *Board) (lootCardEffect, bool, error) {
-//	delete(p.activeEffects, counterfeitPenny)
-//}
-//
-//// Basic loot
-//// The first shop itemCard a player buys this turn costs 0 cents.
-//// This itemCard affects the game state. Event handling occurs at shop purchasing
-//// The Blank Card has no doubling effect
-//func creditCardFunc(p *player, b *Board) (lootCardEffect, bool, error) {
-//	t := b.treasure
-//	var f lootCardEffect = func(roll uint8, blankCard bool) {
-//		t.activeEffects[creditCard] = struct{}{}
-//	}
-//	return f, false, nil
-//}
-
 // Basic loot
 // Choose one:
 // Destroy a curse.
@@ -311,9 +288,7 @@ func deathTarotCardFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 		i = uint8(readInput(0, l-1))
 	}
 	target := players[i]
-	f = func(roll uint8, blankCard bool) {
-		b.eventStack.push(event{p: target, e: deathOfCharacterEvent{}})
-	}
+	f = func(roll uint8, blankCard bool) { b.killPlayer(target) }
 	return f, false, nil
 }
 
@@ -622,12 +597,6 @@ func strengthFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 	return f, false, nil
 }
 
-// Trinket
-// Each time you take damage, gain 1 cent.
-// This effect occurs after damage has been successfully dealt to the player
-//func swallowedPennyFunc(p *player, b *Board) (lootCardEffect, bool, error) {
-//}
-
 // Tarot Card
 // Choose one:
 // Take 1 damage, gain 4 cents.
@@ -641,7 +610,7 @@ func temperanceFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 		take2damage = true
 	}
 	var f lootCardEffect = func(roll uint8, blankCard bool) {
-		if _, ok := p.activeEffects[temperance]; ok {
+		if checkActiveEffects(p.activeEffects, temperance, true) {
 			var n int8 = 4 // assume one damage unless shown otherwise
 			var centsGain = p.gainCents
 			if p.Character.hp != 0 {
@@ -650,7 +619,6 @@ func temperanceFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 				}
 				centsGain(n)
 			}
-			delete(p.activeEffects, temperance)
 		}
 
 	}
@@ -1093,4 +1061,95 @@ func wheelOfFortuneFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 		}
 	}
 	return f, true, nil
+}
+
+// Event based passive
+// Each time a player dies, loot 1
+func bloodyPennyEvent(p *player, b *Board, lCard card, en *eventNode) (cardEffect, bool, error) {
+	var f cardEffect
+	var err error
+	if err = en.checkDeath(nil); err == nil {
+		f = func(roll uint8) { p.loot(b.loot) }
+	}
+	return f, false, err
+}
+
+// Preventative event based passive
+// Each time you die, roll: 1-5: You Die. 6: Prevent death. If it was your turn, end it.
+func brokenAnkhChecker(p *player) {}
+
+// Event based passive
+// At the start of your turn, look at the top card of the loot deck.
+// You may put it on the bottom
+func cainsEyeEvent(p *player, b *Board, lCard card, en *eventNode) (cardEffect, bool, error) {
+	var f cardEffect
+	var err error
+	if err = en.checkStartOfTurn(p); err == nil {
+		f = b.peekTrinketHelper(cainsEye)
+	}
+	return f, false, err
+}
+
+// Conditional constant item
+// Each time you gain cents, gain an additional 1 cent.
+func counterfeitPennyChecker(p *player) {
+	if _, err := p.getItemIndex(counterfeitPenny, true); err == nil {
+		p.Pennies += 1
+	}
+}
+
+// Constant Passive
+// Gain +1 Attack for the first attack roll of your turn.
+func curvedHornConstant(p *player, b *Board, lCard card, isLeaving bool) {
+	if !isLeaving {
+		p.activeEffects[curvedHorn] = struct{}{}
+	} else {
+		delete(p.activeEffects, curvedHorn)
+	}
+}
+
+// Event based passive
+// At the start of your turn, look at the top card of the Treasure deck.
+// You may put it on the bottom.
+func goldenHorseShoeEvent(p *player, b *Board, lCard card, en *eventNode) (cardEffect, bool, error) {
+	var f cardEffect
+	var err error
+	if err = en.checkStartOfTurn(p); err == nil {
+		f = b.peekTrinketHelper(goldenHorseShoe)
+	}
+	return f, false, err
+}
+
+// Preventative event based passive
+// Each time you take damage, Roll:
+// 1-5: Nothing. 6: Prevent 1 damage.
+func guppysHairballChecker(es *eventStack, damageNode *eventNode) cardEffect {
+	return func(roll uint8) {
+		if roll == 6 {
+			_ = es.preventDamage(1, damageNode)
+		}
+	}
+}
+
+// Event based passive
+// At the start of your turn, look at the top card of the Monster deck.
+// You may put it on the bottom.
+func purpleHeartEvent(p *player, b *Board, lCard card, en *eventNode) (cardEffect, bool, error) {
+	var f cardEffect
+	var err error
+	if err = en.checkStartOfTurn(p); err == nil {
+		f = b.peekTrinketHelper(purpleHeart)
+	}
+	return f, false, err
+}
+
+// Event based passive
+// Each time you take damage, gain 1 cent.
+func swallowedPennyEvent(p *player, b *Board, lCard card, en *eventNode) (cardEffect, bool, error) {
+	var f cardEffect
+	var err error
+	if _, err = en.checkDamageToPlayer(p.Character.id); err == nil {
+		f = func(roll uint8) { p.gainCents(1) }
+	}
+	return f, false, err
 }

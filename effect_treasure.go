@@ -165,7 +165,7 @@ func bobsBrainFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, 
 
 // Starting Item (Judas)
 // Active Item
-// Add or subtract 1 from any Dice roll.
+// Add or subtractUint8 1 from any Dice roll.
 func bookOfBelialFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 	var ans uint8
 	var n int8 = 1
@@ -1004,7 +1004,7 @@ func goldenRazorBladeFunc(p *player, b *Board, tCard card) (cardEffect, bool, er
 func greedsGulletFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
 	var err error
-	if err = en.checkDeathOfSelf(p); err == nil {
+	if err = en.checkDeath(p); err == nil {
 		f = func(roll uint8) { p.gainCents(8) }
 	}
 	return f, false, err
@@ -1017,7 +1017,7 @@ func greedsGulletFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffec
 func guppysCollarFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
 	var err error
-	if err = en.checkDeathOfSelf(p); err == nil {
+	if err = en.checkDeath(p); err == nil {
 		f = func(roll uint8) {
 			if roll >= 1 || roll <= 3 {
 				en.event.e = fizzledEvent{}
@@ -1053,7 +1053,7 @@ func guppysHeadFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 // Take 1 damage. Prevent up to two damage to a player.
 func guppysPawFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 	return func(roll uint8) {
-		if _, ok := p.activeEffects[guppysPaw]; ok {
+		if checkActiveEffects(p.activeEffects, guppysPaw, true) {
 			dEvents := b.eventStack.getDamageOfCharacterEvents()
 			l := len(dEvents)
 			var ans uint8
@@ -1066,7 +1066,6 @@ func guppysPawFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 				n := uint8(readInput(1, 2))
 				b.eventStack.preventDamage(n, dEvents[ans])
 			}
-			delete(p.activeEffects, guppysPaw)
 		}
 	}, false, nil
 }
@@ -1883,7 +1882,7 @@ func steamySaleFunc(p *player) int8 {
 func suicideKingFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
 	var err error
-	if err = en.checkDeathOfSelf(p); err == nil {
+	if err = en.checkDeath(p); err == nil {
 		f = func(roll uint8) {
 			for i := 0; i < 3; i++ {
 				p.loot(b.loot)
@@ -2234,24 +2233,24 @@ func theDeadCatFuncConstant(p *player, b *Board, tCard card, isLeaving bool) {
 	}
 }
 
-func theDeadCatFuncEvent(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
+func theDeadCatChecker(deadCat *treasureCard, es *eventStack, damageNode *eventNode) (cardEffect, error) {
 	var f cardEffect
-	var err error
-	c, ok := tCard.(*treasureCard)
-	if !ok {
-		panic("always should be a pointer to a treasure value!")
-	}
-	if damage, err := en.checkDamageToPlayer(p.Character.id); err == nil && c.counters > 0 {
-		f = func(roll uint8) {
-			if c.counters-int8(damage.n) > 0 {
-				_ = b.eventStack.fizzle(en)
-			} else {
-				_ = b.eventStack.preventDamage(damage.n, en)
+	var err = errors.New("dead cat could not activate")
+	if d, ok := damageNode.event.e.(damageEvent); ok {
+		if deadCat.id == theDeadCat && deadCat.counters > 0 {
+			err, f = nil, func(roll uint8) {
+				var x int8 = int8(d.n)
+				if deadCat.counters < x {
+					x = deadCat.counters
+				}
+				_ = es.preventDamage(uint8(x), damageNode)
+				deadCat.loseCounters(x)
 			}
-			c.loseCounters(int8(damage.n))
+		} else {
+			panic("need a pointer to the dead cat card!")
 		}
 	}
-	return f, false, err
+	return f, err
 }
 
 // Hybrid passive item
@@ -2267,8 +2266,7 @@ func theHabitFuncConstant(p *player, b *Board, tCard card, isLeaving bool) {
 func theHabitFuncEvent(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
 	var err error
-	_, first := p.activeEffects[theHabit]
-	if _, err = en.checkDamageToPlayer(p.Character.id); err == nil && first {
+	if _, err = en.checkDamageToPlayer(p.Character.id); err == nil && checkActiveEffects(p.activeEffects, theHabit, true) {
 		fmt.Println("1) Recharge an item\n2) Do nothing.")
 		if readInput(1, 2) == 1 {
 			a := p.getTriggeredActiveItems()
@@ -2282,7 +2280,6 @@ func theHabitFuncEvent(p *player, b *Board, tCard card, en *eventNode) (cardEffe
 				f = func(roll uint8) { p.rechargeActiveItemById(a[i].id) }
 			}
 		}
-		delete(p.activeEffects, theHabit)
 	}
 	return f, false, err
 }

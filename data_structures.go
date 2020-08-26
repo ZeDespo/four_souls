@@ -123,6 +123,7 @@ func (d deck) scan(ids ...uint16) ([]card, map[uint16]uint8) {
 		}
 	}
 	return foundCards, idMaps
+	return foundCards, idMaps
 }
 
 // Find a card in the slice based off its id
@@ -208,7 +209,7 @@ type eventNode struct {
 	top   *eventNode // Points to the top of the stack (head points to tail)
 }
 
-// Add or subtract a value from a diceroll on the event stack
+// Add or subtractUint8 a value from a diceroll on the event stack
 // n int8: The positive or negative value to apply to the diceroll
 // rollNode *eventNode: The deckNode containing the dice roll event.
 func (es *eventStack) addToDiceRoll(n int8, rollNode *eventNode) {

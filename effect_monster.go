@@ -292,17 +292,6 @@ func horfChecker(mId uint16, roll uint8) bool {
 	return mId == horf && roll == 2
 }
 
-//func horfEvent(p *player, b *Board, mCard value, en *eventNode) (cardEffect, bool, error) {
-//	var f cardEffect
-//	var err error
-//	if err = p.isActivePlayer(b); err == nil {
-//		if err = en.checkAttackRoll(2, *(b.eventStack.peek())); err == nil {
-//			f = func(roll uint8) { p.activeEffects[horf] = struct{}{} }
-//		}
-//	}
-//	return f, false, err
-//}
-
 func horfReward(b *Board) (cardEffect, bool) {
 	return rewardCentsHelper(b, 3)
 }
@@ -1012,7 +1001,7 @@ func larryJrEvent(p *player, b *Board, mCard card, en *eventNode) (cardEffect, b
 	var f cardEffect
 	var err error = errors.New("larry jr already activated")
 	ap := &b.players[b.api]
-	if _, ok := ap.activeEffects[larryJr]; !ok {
+	if !checkActiveEffects(p.activeEffects, larryJr, false) {
 		m := mCard.(*monsterCard)
 		if _, err = en.checkDamageToSpecificMonster(larryJr); err == nil && m.hp > 0 && m.hp <= 2 {
 			f = func(roll uint8) { ap.activeEffects[larryJr] = struct{}{} }

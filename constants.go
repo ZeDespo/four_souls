@@ -528,7 +528,7 @@ const foreverAloneDesc = "Choose One:\n" +
 const sleightOfHandDesc = "Look at the top 3 cards of the deck. Put them back in any order."
 const theCurseDesc = "Put the top value of any discardPile pile on top of its deck."
 const theD6Desc = "Force a player to re-roll any Dice roll."
-const bookOfBelialDesc = "Add or subtract 1 to any Dice roll."
+const bookOfBelialDesc = "Add or subtractUint8 1 to any Dice roll."
 const lazarusRagsDesc = "Each time you die, after paying penalties: gain +1 tArea."
 const incubusDesc = "Choose One:\n" +
 	"- Look at a player's hand, you may switch a value from your hand with one of theirs.\n" +

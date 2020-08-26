@@ -155,7 +155,7 @@ func headerEventStack() string {
 	return "\tIndex\tName\tEvent Type\tTargeting\n"
 }
 
-func (l lootCard) header() string {
+func (lc lootCard) header() string {
 	return fmt.Sprintf("\tIndex\tName\tTrinket\n")
 }
 
@@ -169,7 +169,7 @@ func (m monsterCard) header() string {
 	return s
 }
 
-func (t treasureCard) header() string {
+func (tc treasureCard) header() string {
 	return "\tIndex\tName\tEternal\tActive\tPaid\tPassive\tTriggered\tCounters\n"
 }
 
@@ -187,13 +187,13 @@ func (c characterCard) showCard(idx int) string {
 	return fmt.Sprintf("\t%d\t%s\t%d\t%d\t%t", idx, c.name, c.hp, c.ap, c.triggered)
 }
 
-func (l lootCard) showCard(idx int) string {
-	var s = fmt.Sprintf("\t%d\t%s", idx, l.name)
-	if l.trinket {
-		s += fmt.Sprintf("\t%t\t%t\t%t\t%t", l.eternal, false, false, true)
+func (lc lootCard) showCard(idx int) string {
+	var s = fmt.Sprintf("\t%d\t%s", idx, lc.name)
+	if lc.trinket {
+		s += fmt.Sprintf("\t%t\t%t\t%t\t%t", lc.eternal, false, false, true)
 	}
 	s += "\n"
-	return fmt.Sprintf("\t%d\t%s\t%t\n", idx, l.name, l.trinket)
+	return fmt.Sprintf("\t%d\t%s\t%t\n", idx, lc.name, lc.trinket)
 }
 
 func (m monsterCard) showCard(idx int) string {
@@ -206,9 +206,9 @@ func (m monsterCard) showCard(idx int) string {
 	return s
 }
 
-func (t treasureCard) showCard(idx int) string {
-	return fmt.Sprintf("\t%d\t%s\t%t\t%t\t%t\t%t\t%t\t%d\n", idx, t.name, t.eternal, t.active, t.paid,
-		t.passive, t.triggered, t.counters)
+func (tc treasureCard) showCard(idx int) string {
+	return fmt.Sprintf("\tc%d\tc%s\tc%tc\tc%tc\tc%tc\tc%tc\tc%tc\tc%d\n", idx, tc.name, tc.eternal, tc.active, tc.paid,
+		tc.passive, tc.triggered, tc.counters)
 }
 
 func (en eventNode) showEvent(idx int) string {

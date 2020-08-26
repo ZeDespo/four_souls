@@ -157,13 +157,14 @@ func (p *player) addSoulToBoard(c card) bool {
 func (b *Board) battle(p *player, m *monsterCard, roll uint8) {
 	if roll >= m.roll { // successful hit
 		attack := p.Character.ap
-		if _, ok := p.activeEffects[championBelt]; ok {
+		if checkActiveEffects(p.activeEffects, curvedHorn, true) {
 			attack += 1
-			delete(p.activeEffects, championBelt)
 		}
-		if _, ok := p.activeEffects[polydactyly]; ok {
+		if checkActiveEffects(p.activeEffects, championBelt, true) {
 			attack += 1
-			delete(p.activeEffects, polydactyly)
+		}
+		if checkActiveEffects(p.activeEffects, polydactyly, true) {
+			attack += 1
 		}
 		if emptyVesselChecker(p, true) {
 			attack += 1
@@ -361,18 +362,15 @@ func (t *tArea) draw() treasureCard {
 // Resolve end of turn passive effects, be rid of any "until end of turn" effects
 // that would otherwise not be resolved by the reset method.
 func (b *Board) endPhase() {
-	for i, p := range b.players {
-		if _, ok := p.activeEffects[twoOfClubs]; ok {
-			delete(b.players[i].activeEffects, twoOfClubs)
-		}
-		if _, ok := p.activeEffects[diplopia]; ok {
+	for _, p := range b.players {
+		checkActiveEffects(p.activeEffects, twoOfClubs, true)
+		if checkActiveEffects(p.activeEffects, diplopia, true) {
 			j, err := p.getItemIndex(diplopia, true)
 			if err == nil {
 				tc := treasureCard{baseCard: baseCard{name: "Diplopia", id: diplopia}, active: true, f: diplopiaFunc}
 				p.popPassiveItem(j)
 				p.addCardToBoard(&tc)
 			}
-			delete(b.players[i].activeEffects, diplopia)
 		}
 	}
 }
@@ -399,11 +397,8 @@ func (p *player) gainCents(n int8) {
 		p.bumboAddCounterHelper(p.PassiveItems[i].(*treasureCard), n)
 	} else {
 		p.Pennies += n
-		if _, err := p.getItemIndex(counterfeitPenny, true); err == nil {
-			p.Pennies += 1
-		}
+		counterfeitPennyChecker(p)
 	}
-
 }
 
 func (p player) isActivePlayer(b *Board) error {
@@ -415,16 +410,15 @@ func (p player) isActivePlayer(b *Board) error {
 }
 
 func (p *player) loot(l *lArea) {
-	if _, ok := l.activeEffects[compost]; ok { // Draw from top of discard pile.
+	if checkActiveEffects(l.activeEffects, compost, true) { // Draw from top of discard pile.
 		if dC, err := l.discardPile.pop(); err == nil {
 			p.Hand = append(p.Hand, dC.(lootCard))
 		}
-		delete(l.activeEffects, compost)
 	} else { // Standard draw
 		p.Hand = append(p.Hand, l.draw())
 
 	}
-	if _, ok := p.activeEffects[twoOfClubs]; ok { // Draw an additional value while active.
+	if checkActiveEffects(p.activeEffects, twoOfClubs, false) { // Draw an additional card while active.
 		p.Hand = append(p.Hand, l.draw())
 	}
 }
@@ -602,6 +596,7 @@ func (p *player) resetStats(isActivePlayer bool) {
 	c.hp, c.ap = c.baseHealth, c.baseAttack
 	if isActivePlayer {
 		delete(p.activeEffects, larryJr)
+		delete(p.activeEffects, theEmpress)
 	}
 }
 
@@ -610,16 +605,15 @@ func (b *Board) rollDice() (diceRollEvent, *player) {
 		nextEvent := node.next.event.e
 		var p *player = node.event.p
 		roll := uint8(rand.Intn(6) + 1)
-		if _, ok := p.activeEffects[theEmpress]; ok {
+		if checkActiveEffects(p.activeEffects, theEmpress, false) {
 			modifyDiceRoll(&roll, 1)
 		}
-		if _, ok := p.activeEffects[theHaunt]; ok {
+		if checkActiveEffects(p.activeEffects, theHaunt, false) {
 			modifyDiceRoll(&roll, -1)
 		}
 		if _, ok := nextEvent.(declareAttackEvent); ok {
-			if _, ok := p.activeEffects[bumbo]; ok {
+			if checkActiveEffects(p.activeEffects, bumbo, true) {
 				modifyDiceRoll(&roll, 2)
-				delete(p.activeEffects, bumbo)
 			}
 			if emptyVesselChecker(p, false) {
 				modifyDiceRoll(&roll, 1)
@@ -656,12 +650,11 @@ func (b *Board) startingPhase(p *player) {
 		p.ActiveItems[i].recharge()
 	}
 	p.loot(b.loot)
-	firstTimeIds := [5]uint16{curvedHorn, bumbo, championBelt, theHabit, polydactyly}
-	for _, id := range firstTimeIds {
-		if i, err := p.getItemIndex(id, true); err == nil {
-			if id == bumbo && p.PassiveItems[i].getCounters() > 0 {
-				p.activeEffects[id] = struct{}{}
-			} else {
+	firstTimeIds := map[uint16]struct{}{curvedHorn: {}, bumbo: {}, championBelt: {}, theHabit: {}, polydactyly: {}}
+	for _, c := range p.PassiveItems {
+		id := c.getId()
+		if _, ok := firstTimeIds[id]; ok {
+			if (id == bumbo && c.getCounters() > 0) || id != bumbo {
 				p.activeEffects[id] = struct{}{}
 			}
 		}
@@ -768,11 +761,12 @@ func (b *Board) DebugGame() {
 	numPlayers := uint8(len(b.players))
 	for {
 		ap := &b.players[b.api]
-		if _, ok := ap.activeEffects[famine]; ok {
+		fmt.Println()
+		if checkActiveEffects(ap.activeEffects, famine, true) {
 			continue
 		}
 		if ap.forceAttack && !ap.inBattle {
-			if _, ok := ap.activeEffects[portal]; ok {
+			if checkActiveEffects(ap.activeEffects, portal, true) {
 				b.attackMonsterDeck()
 			}
 		}
@@ -830,6 +824,17 @@ func chainCards(ap *player, b *Board) {
 			i = (i + 1) % l
 		}
 	}
+}
+
+func checkActiveEffects(activeEffects map[uint16]struct{}, key uint16, deleteIfExists bool) bool {
+	var activeEffect bool
+	if _, ok := activeEffects[key]; ok {
+		activeEffect = true
+		if deleteIfExists { // Usually true for "just once" effects (Cancer, Pestilence, Credit Card)
+			delete(activeEffects, key)
+		}
+	}
+	return activeEffect
 }
 
 func checkVictory(players []player) []player {

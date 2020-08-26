@@ -294,8 +294,16 @@ func (es eventStack) getDiceRollEvents() []*eventNode {
 	return nodes
 }
 
-func (p player) getHand() []lootCard {
-	return p.Hand
+func (p player) getHandCardIndexById(lId uint16) (uint8, error) {
+	err := errors.New("card not found")
+	var i uint8
+	for i = 0; i < uint8(len(p.Hand)); i++ {
+		if p.Hand[i].id == lId {
+			err = nil
+			break
+		}
+	}
+	return i, err
 }
 
 func (es eventStack) getIntentionToAttackEvents() []*eventNode {
@@ -341,7 +349,6 @@ func (b Board) getItemIndex(itemId uint16, isPassive bool) (uint8, *player) {
 	return j, p
 }
 
-// TODO: Make this getter work as a binary search.
 func (p player) getItemIndex(itemId uint16, isPassive bool) (uint8, error) {
 	var e = errors.New("item not found")
 	var median, low uint8
@@ -567,12 +574,7 @@ func (b Board) getPreviousPlayer(cId uint16) *player {
 	return &b.players[next]
 }
 
-func (t tArea) getShopItems() []treasureCard {
-	return t.zones
-}
-
-func (b Board) getSouls() ([]card, map[uint16]*player) {
-	l := len(b.players)
+func (b *Board) getSouls() ([]card, map[uint16]*player) {
 	var souls []card
 	playerMap := make(map[uint16]*player)
 	for _, p := range b.players {

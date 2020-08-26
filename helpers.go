@@ -91,6 +91,7 @@ func (en eventNode) checkAttackRoll(expected uint8, nextEn eventNode) error {
 	return err
 }
 
+// Check if the monster dealt damage ONLY
 func (en eventNode) checkDamageFromMonster(mId uint16) (damageEvent, error) {
 	var damage damageEvent
 	var ok bool
@@ -118,6 +119,7 @@ func (en eventNode) checkDamageToPlayer(cId uint16) (damageEvent, error) {
 	return damage, err
 }
 
+// Check if a monster dealt damage to a specific player based off their ids.
 func (en eventNode) checkDamageToPlayerFromMonster(cId, mId uint16) (damageEvent, error) {
 	damage, err := en.checkDamageToPlayer(cId)
 	if err == nil && damage.monster != nil {
@@ -129,7 +131,7 @@ func (en eventNode) checkDamageToPlayerFromMonster(cId, mId uint16) (damageEvent
 	return damage, err
 }
 
-// Check if an event deckNode is a "damage to monster" event.
+// Check if damage to some monster occurred
 func (en eventNode) checkDamageToMonster() (damageEvent, error) {
 	var damage damageEvent
 	var ok bool
@@ -142,6 +144,7 @@ func (en eventNode) checkDamageToMonster() (damageEvent, error) {
 	return damage, err
 }
 
+// Check if a specific monster took some kind of damage
 func (en eventNode) checkDamageToSpecificMonster(id uint16) (damageEvent, error) {
 	var damage damageEvent
 	var err = errors.New("not a damage to given monster id")
@@ -153,9 +156,14 @@ func (en eventNode) checkDamageToSpecificMonster(id uint16) (damageEvent, error)
 	return damage, err
 }
 
-func (en eventNode) checkDeathOfSelf(p *player) error {
+func (en eventNode) checkDeath(p *player) error {
 	err := errors.New("not a death to self event")
-	if _, ok := en.event.e.(deathOfCharacterEvent); ok && en.event.p.Character.id == p.Character.id {
+	if _, ok := en.event.e.(deathOfCharacterEvent); ok {
+		if p != nil {
+			if en.event.p.Character.id == p.Character.id {
+				err = nil
+			}
+		}
 		err = nil
 	}
 	return err
@@ -257,8 +265,10 @@ func (b *Board) damagePlayerToMonster(p *player, target *monsterCard, n uint8, c
 }
 
 func (b *Board) damageMonsterToPlayer(m *monsterCard, target *player, n uint8, combatRoll uint8) {
-	b.eventStack.push(event{p: target, e: damageEvent{monster: m, target: target, n: n}, roll: combatRoll})
-	b.preventDamageHelper(target)
+	if !target.isDead() {
+		b.eventStack.push(event{p: target, e: damageEvent{monster: m, target: target, n: n}, roll: combatRoll})
+		b.preventDamageHelper(target, b.eventStack.peek())
+	}
 }
 
 // p *player: the player that pushed the event to the stack, if applicable (monster attack)
@@ -267,19 +277,27 @@ func (b *Board) damageMonsterToPlayer(m *monsterCard, target *player, n uint8, c
 func (b *Board) damagePlayerToPlayer(p, target *player, n uint8) {
 	if !target.isDead() { // Not dead
 		b.eventStack.push(event{p: p, e: damageEvent{target: target, n: n}})
-		b.preventDamageHelper(p)
+		b.preventDamageHelper(p, b.eventStack.peek())
 	}
 }
 
-func (b *Board) preventDamageHelper(p *player) {
+func (b *Board) preventDamageHelper(p *player, damageNode *eventNode) {
 	damagePrevention := [2]uint16{guppysHairball, theDeadCat}
 	for _, id := range damagePrevention {
-		if i, err := p.getItemIndex(id, true); err == nil {
-			var c itemCard = p.PassiveItems[i]
-			if f, special, err := c.getEventPassive()(p, b, c, b.eventStack.head.top); err == nil {
-				b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: c, f: f}})
-				if special {
+		var f cardEffect
+		if _, ok := damageNode.event.e.(damageEvent); ok {
+			if i, err := p.getItemIndex(id, true); err == nil {
+				var c card = p.PassiveItems[i]
+				if id == guppysHairball {
+					f = guppysHairballChecker(&b.eventStack, damageNode)
+					b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: c, f: f}})
 					b.rollDiceAndPush()
+				} else if id == theDeadCat {
+					var err error
+					if f, err = theDeadCatChecker(p.PassiveItems[i].(*treasureCard), &b.eventStack, damageNode); err != nil {
+						continue
+					}
+					b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: c, f: f}})
 				}
 			}
 		}
@@ -407,45 +425,77 @@ func (b *Board) killMonster(p *player, mId uint16) {
 		if m.isBoss {
 			b.players[b.api].addSoulToBoard(m)
 			if mId == theHaunt {
-				ap := &b.players[b.api]
-				delete(ap.activeEffects, theHaunt)
+				checkActiveEffects(b.players[b.api].activeEffects, theHaunt, true)
 			}
-		} else if mId == delirium {
+		} else if m.isBoss && mId == delirium {
 			deliriumDeathHandler(m, b.monster)
 		} else {
 			b.discard(m)
 		}
 		theMidasTouchHelper(b.monster)
-		b.giveRewards(p, m.rf)
+		rf, rollRequired := m.rf(b)
+		b.eventStack.push(event{p: p, e: monsterRewardEvent{r: rf}})
+		if rollRequired {
+			b.rollDiceAndPush()
+		}
 		b.killMonster(p, stoney)
 		b.killMonster(p, deathsHead)
 	}
 }
 
-func (b *Board) giveRewards(p *player, rf rewardGiver) {
-	f, rollRequired := rf(b)
-	b.eventStack.push(event{p: p, e: monsterRewardEvent{r: f}})
-	if rollRequired {
-		b.rollDiceAndPush()
-	}
-}
-
+// Method that pushes the death event to the stack for a player
+// Here's the player's passive opportunity to prevent death and end his / her turn
 func (b *Board) killPlayer(target *player) {
 	if !target.isDead() {
 		b.eventStack.push(event{p: target, e: deathOfCharacterEvent{}})
+		deathNode := b.eventStack.peek()
 		deathPrevention := [2]uint16{brokenAnkh, guppysCollar}
 		for _, id := range deathPrevention {
-			if i, err := target.getItemIndex(id, true); err == nil {
-				var c itemCard = target.PassiveItems[i]
-				if f, special, err := c.getEventPassive()(target, b, c, b.eventStack.head.top); err == nil {
-					b.eventStack.push(event{p: target, e: triggeredEffectEvent{c: c, f: f}})
-					if special {
-						b.rollDiceAndPush()
+			deathPlayerPrevention(id, target, b, deathNode)
+		}
+	}
+}
+
+func deathPlayerPrevention(id uint16, p *player, b *Board, en *eventNode) {
+	var f cardEffect
+	var err error
+	var i uint8
+	if _, ok := en.event.e.(deathOfCharacterEvent); ok { // No need to perform if event's already fizzled
+		if i, err = p.getItemIndex(id, true); err == nil && (id == brokenAnkh || id == guppysCollar) {
+			f = func(roll uint8) {
+				if (id == brokenAnkh && roll == 6) || (id == guppysCollar && roll >= 1 && roll <= 3) {
+					en.event.e = fizzledEvent{}
+					if err := p.isActivePlayer(b); err == nil {
+						b.forceEndOfTurn()
 					}
 				}
 			}
+			b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: p.PassiveItems[i], f: f}})
+			b.rollDiceAndPush()
 		}
 	}
+}
+
+// Helper for cains eye, golden horse Shoe, and Purple Heart
+func (b *Board) peekTrinketHelper(id uint16) cardEffect {
+	cardDeckMap := map[uint16]*deck{
+		cainsEye: &b.loot.deck, purpleHeart: &b.monster.deck, goldenHorseShoe: &b.treasure.deck}
+	var f cardEffect
+	if d, ok := cardDeckMap[id]; ok {
+		f = func(roll uint8) {
+			if c, err := d.peek(); err == nil {
+				c.showCard(0)
+				fmt.Println("1) Place this card on the bottom of the deck.\n2) Place it back on top.")
+				if readInput(1, 2) == 1 {
+					c, _ = d.pop()
+					b.placeInDeck(c, false)
+				}
+			}
+		}
+	} else {
+		panic(fmt.Errorf("card with id %d should not have called this function", id))
+	}
+	return f
 }
 
 // Helper for the "Remote Detonator" treasure card
@@ -560,7 +610,7 @@ func modifyHealth(p *player, n uint8, leavingField bool) {
 
 // Helper function to ensure that any subtractions with uint8
 // variables do not cause an underflow
-func subtract(a, b uint8) uint8 {
+func subtractUint8(a, b uint8) uint8 {
 	var y uint8
 	x := int8(a) - int8(b)
 	if x < 0 {
