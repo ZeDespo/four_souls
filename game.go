@@ -101,7 +101,7 @@ func (p *player) addCardToBoard(c card) {
 			p.Curses = append(p.Curses, mc)
 		}
 	default:
-		panic("not a valid value to add to the board")
+		panic("not a valid card to add to the board")
 	}
 }
 
@@ -217,6 +217,31 @@ func (t *tArea) buyFromShop(p *player, idx uint8) error {
 	return err
 }
 
+// Add an itemCard's id to the player's active effects map to
+// instruct any card that requires an activation cost of n damage to a player
+// that the cost was met successfully.
+// Ex: damage(1) -> temperance(1): if character is alive, cost met successfully. Gain 4 cents.
+// Ex: damage (1) -> guppysPaw(1): if character is alive, prevent up to 2 damage on the stack to a player.
+// The param nexToResolve is the next deckNode to be popped off the stack following the damage.
+func (p *player) checkDamageRequiredEffects(nextToResolve *eventNode) {
+	if p.Character.hp > 0 {
+		if nextToResolve != nil {
+			switch nextToResolve.event.e.(type) {
+			case lootCardEvent:
+				e := nextToResolve.event.e.(lootCardEvent)
+				if e.l.id == temperance {
+					p.activeEffects[temperance] = struct{}{}
+				}
+			case activateEvent:
+				e := nextToResolve.event.e.(activateEvent)
+				if e.c.getId() == guppysPaw {
+					p.activeEffects[guppysPaw] = struct{}{}
+				}
+			}
+		}
+	}
+}
+
 // This method should only be called after all events on the
 // event stack have resolved
 // Check the field for the following things:
@@ -244,50 +269,80 @@ func (b *Board) checkTheField() []player {
 	return []player{}
 }
 
-// Add an itemCard's id to the player's active effects map to
-// instruct any card that requires an activation cost of n damage to a player
-// that the cost was met successfully.
-// Ex: damage(1) -> temperance(1): if character is alive, cost met successfully. Gain 4 cents.
-// Ex: damage (1) -> guppysPaw(1): if character is alive, prevent up to 2 damage on the stack to a player.
-// The param nexToResolve is the next deckNode to be popped off the stack following the damage.
-func (p *player) damageRequiredEffects(nextToResolve *eventNode) {
-	if p.Character.hp > 0 {
-		if nextToResolve != nil {
-			switch nextToResolve.event.e.(type) {
-			case lootCardEvent:
-				e := nextToResolve.event.e.(lootCardEvent)
-				if e.l.id == temperance {
-					p.activeEffects[temperance] = struct{}{}
-				}
-			case activateEvent:
-				e := nextToResolve.event.e.(activateEvent)
-				if e.c.getId() == guppysPaw {
-					p.activeEffects[guppysPaw] = struct{}{}
-				}
-			}
+// A monster has inflicted damage to a player via a missed attack / other effect.
+// Push the damage to the stack appropriately
+func (b *Board) damageMonsterToPlayer(m *monsterCard, target *player, n uint8, combatRoll uint8) {
+	if !target.isDead() {
+		b.eventStack.push(event{p: target, e: damageEvent{monster: m, target: target, n: n}, roll: combatRoll})
+		b.preventDamageHelper(target, b.eventStack.peek())
+	}
+}
+
+// Helper to any action / effect that damages a monster.
+// Search the zone to make sure the monster is in play, then push damage to the monster.
+func (b *Board) damagePlayerToMonster(p *player, target *monsterCard, n uint8, combatRoll uint8) {
+	if !target.isDead() {
+		if (target.id == carrionQueen && combatRoll != 6) || (target.id == pin && combatRoll == 6) {
+			n = 0
+		}
+		b.eventStack.push(event{p: p, e: damageEvent{target: target, n: n}, roll: combatRoll})
+		if target.id == theDukeOfFlies {
+			b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: target, f: theDukeOfFliesEvent(b.eventStack.peek())}})
+			b.rollDiceAndPush()
 		}
 	}
 }
 
-func (p *player) death(b *Board) {
+// Some player's action / card effect damaged another player.
+// p *player: the player that pushed the event to the stack, if applicable (monster attack)
+// target *player: the subject of the damage
+// n uint8: how much damage to inflict
+func (b *Board) damagePlayerToPlayer(p, target *player, n uint8) {
+	if !target.isDead() { // Not dead
+		b.eventStack.push(event{p: p, e: damageEvent{target: target, n: n}})
+		b.preventDamageHelper(p, b.eventStack.peek())
+	}
+}
+
+// The player died and no card effect was able to stop it.
+// Resolve effects that occur before paying penalties, then pay the deathPenalty penalty
+// 1) Discard one card
+// 2) Lose 1 cent
+// 3) Destroy one item
+// 4) Deactivate all items and character card
+func (p *player) deathPenalty(b *Board) {
 	p.beforePayingPenalties(b)
 	shadowActivated := shadowFunc(p, b)
-	if !shadowActivated {
-		items := p.getAllItems(false)
-		showItems(items, 0)
-		fmt.Println("Destroy one.")
-		ans := readInput(0, len(items)-1)
-		idx, _ := p.getItemIndex(items[ans].getId(), items[ans].isPassive())
-		b.discard(p.popItemByIndex(idx, items[ans].isPassive()))
-		for _, c := range p.ActiveItems {
-			if c.active {
-				c.deathPenalty()
-			}
-		}
+	if !shadowActivated { // The shadow is not in play. Resume deathPenalty normally
 		showLootCards(p.Hand, p.Character.name, 0)
-		fmt.Println("Discard one value.")
+		fmt.Println("Discard one card.")
 		b.discard(p.popHandCard(uint8(readInput(0, len(p.Hand)-1))))
 		p.loseCents(1)
+	}
+	for _, c := range p.getActiveItems(true) {
+		if c.active {
+			c.tapped = true
+		}
+	}
+}
+
+func deathPlayerPrevention(id uint16, p *player, b *Board, en *eventNode) {
+	var f cardEffect
+	var err error
+	var i uint8
+	if _, ok := en.event.e.(deathOfCharacterEvent); ok { // No need to perform if event's already fizzled
+		if i, err = p.getItemIndex(id, true); err == nil && (id == brokenAnkh || id == guppysCollar) {
+			f = func(roll uint8) {
+				if (id == brokenAnkh && roll == 6) || (id == guppysCollar && roll >= 1 && roll <= 3) {
+					en.event.e = fizzledEvent{}
+					if ok := p.isActivePlayer(b); ok {
+						b.forceEndOfTurn()
+					}
+				}
+			}
+			b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: p.PassiveItems[i], f: f}})
+			b.rollDiceAndPush()
+		}
 	}
 }
 
@@ -337,7 +392,7 @@ func (m *mArea) discard(mc *monsterCard) {
 
 func (t *tArea) discard(tc *treasureCard) {
 	tc.counters = 0
-	tc.triggered = false
+	tc.tapped = false
 	t.discardPile = append(t.discardPile, *tc)
 }
 
@@ -401,12 +456,58 @@ func (p *player) gainCents(n int8) {
 	}
 }
 
-func (p player) isActivePlayer(b *Board) error {
-	var err error
-	if p.Character.id != b.players[b.api].Character.id {
-		err = errors.New("not the active player")
+func (p player) isActivePlayer(b *Board) bool {
+	var ok bool
+	if p.Character.id == b.players[b.api].Character.id {
+		ok = true
 	}
-	return err
+	return ok
+}
+
+func (b *Board) killMonster(p *player, mId uint16) {
+	if i, err := b.monster.getActiveMonster(mId); err == nil {
+		m := b.monster.zones[i].pop()
+		m.resetStats()
+		if m.f != nil {
+			if f, _, err := m.f(p, b, m); err == nil { // on deathPenalty trigger
+				b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: m, f: f}})
+				if mId == ragman || mId == wrath {
+					b.rollDiceAndPush()
+				}
+			}
+		}
+		if m.isBoss {
+			b.players[b.api].addSoulToBoard(m)
+			if mId == theHaunt {
+				checkActiveEffects(b.players[b.api].activeEffects, theHaunt, true)
+			}
+		} else if m.isBoss && mId == delirium {
+			deliriumDeathHandler(m, b.monster)
+		} else {
+			b.discard(m)
+		}
+		theMidasTouchHelper(b.monster)
+		rf, rollRequired := m.rf(b)
+		b.eventStack.push(event{p: p, e: monsterRewardEvent{r: rf}})
+		if rollRequired {
+			b.rollDiceAndPush()
+		}
+		b.killMonster(p, stoney)
+		b.killMonster(p, deathsHead)
+	}
+}
+
+// Method that pushes the deathPenalty event to the stack for a player
+// Here's the player's passive opportunity to prevent deathPenalty and end his / her turn
+func (b *Board) killPlayer(target *player) {
+	if !target.isDead() {
+		b.eventStack.push(event{p: target, e: deathOfCharacterEvent{}})
+		deathNode := b.eventStack.peek()
+		deathPrevention := [2]uint16{brokenAnkh, guppysCollar}
+		for _, id := range deathPrevention {
+			deathPlayerPrevention(id, target, b, deathNode)
+		}
+	}
 }
 
 func (p *player) loot(l *lArea) {
@@ -430,6 +531,65 @@ func (p *player) loseCents(n int8) {
 	} else {
 		p.Pennies = x
 	}
+}
+
+// return: Whether the player made an action or decided to pass
+func (p *player) makeChoice(b *Board) bool {
+	didSomething := true
+	actions := p.getPlayerActions(p.isActivePlayer(b), b.eventStack.isEmpty())
+	for i, a := range actions {
+		fmt.Println(i, ") ", a.msg)
+	}
+	fmt.Println("What would", p.Character.name, "like to do?")
+	switch actions[readInput(0, len(actions))].value {
+	case playLootCard:
+		showLootCards(p.Hand, p.Character.name, 0)
+		fmt.Println("Play which card?")
+		handCard := p.Hand[readInput(0, len(p.Hand)-1)]
+		err := handCard.activate(p, b)
+		if err != nil {
+			fmt.Println(fmt.Sprintf("Could not activate %s:\n%s.", handCard.name, err))
+		}
+	case buyItem:
+		b.eventStack.push(event{p: p, e: intentionToPurchaseEvent{}})
+	case attackMonster:
+		if p.inBattle && p.isActivePlayer(b) {
+			monsters := b.monster.getActiveMonsters()
+			l := len(monsters)
+			showMonsterCards(monsters, 0)
+			fmt.Println(fmt.Sprintf("%d) Monster Deck\nWhich target to attack?", l))
+			i := readInput(0, l)
+			var m *monsterCard
+			if i < l {
+				m = monsters[i]
+			} else {
+				m = nil // Attack the deck instead
+			}
+			b.eventStack.push(event{p: p, e: intentionToAttackEvent{m: m}})
+		} else {
+			b.eventStack.push(event{p: p, e: declareAttackEvent{m: b.monster.getActiveMonsterInBattle()}})
+			b.rollDiceAndPush()
+		}
+	case activateCharacter:
+		err := p.Character.activate(p, b)
+		if err != nil {
+			fmt.Println(err)
+		}
+	case activateItem:
+		items := p.getUsableActiveItems()
+		l := len(items)
+		if l > 0 {
+			showTreasureCards(items, p.Character.name, 0)
+			fmt.Println("Which card to activate?")
+			err := items[readInput(0, l-1)].activate(p, b)
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+	case doNothing:
+		didSomething = false
+	}
+	return didSomething
 }
 
 func (b *Board) placeInDeck(c card, onTop bool) {
@@ -582,8 +742,8 @@ func (p *player) rechargeActiveItemById(tId uint16) {
 	}
 }
 
-func (m *monsterCard) resetStats() {
-	m.hp, m.ap, m.roll, m.inBattle = m.baseHealth, m.baseAttack, m.baseRoll, false
+func (mc *monsterCard) resetStats() {
+	mc.hp, mc.ap, mc.roll, mc.inBattle = mc.baseHealth, mc.baseAttack, mc.baseRoll, false
 }
 
 // Set the player's and character's values back to their base values,
@@ -592,11 +752,11 @@ func (p *player) resetStats(isActivePlayer bool) {
 	p.forceEnd = false
 	p.numAttacks, p.numPurchases, p.numLootPlayed = p.baseNumAttacks, p.baseNumPurchases, p.baseNumLootPlayed
 	c := &p.Character
-	c.triggered = false
+	c.tapped = false
 	c.hp, c.ap = c.baseHealth, c.baseAttack
+	delete(p.activeEffects, theEmpress)
 	if isActivePlayer {
 		delete(p.activeEffects, larryJr)
-		delete(p.activeEffects, theEmpress)
 	}
 }
 
@@ -639,28 +799,6 @@ func (b *Board) rollDiceAndPush() {
 	b.eventStack.push(event)
 }
 
-// Recharge all active items, character card, and
-// draw one card from the loot deck.
-// Make all of the passive items such as Curved Horn,
-// and Cancer, that mess with the "first" of something
-// in a turn possible to activate.
-func (b *Board) startingPhase(p *player) {
-	p.Character.triggered = false
-	for i := range p.ActiveItems {
-		p.ActiveItems[i].recharge()
-	}
-	p.loot(b.loot)
-	firstTimeIds := map[uint16]struct{}{curvedHorn: {}, bumbo: {}, championBelt: {}, theHabit: {}, polydactyly: {}}
-	for _, c := range p.PassiveItems {
-		id := c.getId()
-		if _, ok := firstTimeIds[id]; ok {
-			if (id == bumbo && c.getCounters() > 0) || id != bumbo {
-				p.activeEffects[id] = struct{}{}
-			}
-		}
-	}
-}
-
 func (t *tArea) stealFromShop(id uint16) (treasureCard, error) {
 	var tc treasureCard
 	var err = errors.New("itemCard does not exist in the shop")
@@ -684,18 +822,6 @@ func (p *player) stealItem(id uint16, isPassive bool, p2 *player) {
 func check(err error) {
 	if err != nil {
 		panic(err)
-	}
-}
-
-// No dice roll can be below 1 or above 6.
-// This helper function assures any additions or subtractions
-// will keep the dice within these bounds.
-func modifyDiceRoll(originalRoll *uint8, x int8) {
-	y := int8(*originalRoll) + x
-	if y > 6 {
-		y = 6
-	} else if y < 1 {
-		y = 1
 	}
 }
 
@@ -759,10 +885,11 @@ func (b *Board) attackMonsterDeck() {
 // All of the outputs here will take place on the command line only.
 func (b *Board) DebugGame() {
 	numPlayers := uint8(len(b.players))
-	for {
+	victors := make([]player, 0, numPlayers)
+	for len(victors) == 0 {
 		ap := &b.players[b.api]
-		fmt.Println()
-		if checkActiveEffects(ap.activeEffects, famine, true) {
+		if checkActiveEffects(ap.activeEffects, famine, true) { // skip the player's next turn
+			b.api = (b.api + 1) % numPlayers
 			continue
 		}
 		if ap.forceAttack && !ap.inBattle {
@@ -799,29 +926,23 @@ func (b *Board) DebugGame() {
 	}
 }
 
-func chainCards(ap *player, b *Board) {
-	players := b.getPlayers(false)
-	i, l := 1, len(players)
-	reactions := make([]bool, l)
-	var trinShield, chain = trinityShieldFunc(ap), true
-	for chain {
-		p := players[i]
-		isActivePlayer := p.Character.id == ap.Character.id
-		if isActivePlayer || !isActivePlayer && !trinShield {
-			actions := players[i].getPlayerActions(isActivePlayer, b.eventStack.size == 0)
-			fmt.Println("Do you wish to respond?")
-			switch actions[readInput(0, len(actions)-1)].value {
-			case activateCharacter:
-			case activateItem:
-			case doNothing:
-
+// This function is originally called either when the active player
+// pushes an event to the event stack, or when some other card's effect
+// pushes a new event to the stack in the middle of resolving.
+// Check to see if other players have a response to some action.
+// initiatingPlayer *player: the player whose pushed action is responsible
+// for calling this function
+// b *Board: the board struct
+func actionReactionChecker(initiatingPlayer *player, b *Board) {
+	keepGoing := true
+	checkOrder := append(b.getOtherPlayers(initiatingPlayer, false), initiatingPlayer)
+	ap := &b.players[b.api]
+	for keepGoing {
+		keepGoing = false
+		for _, p := range checkOrder {
+			if p.isActivePlayer(b) || (!p.isActivePlayer(b) && !trinityShieldFunc(ap)) {
+				keepGoing = keepGoing || p.makeChoice(b)
 			}
-			var newChain bool
-			for _, r := range reactions {
-				newChain = newChain || r
-			}
-			chain = newChain
-			i = (i + 1) % l
 		}
 	}
 }

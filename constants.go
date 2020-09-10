@@ -545,7 +545,7 @@ const voidDesc = "Choose One:\n" +
 const lordOfThePitDesc = "Cancel any numAttacks on a mArea. That player may numAttacks again this turn."
 const woodenNickelDesc = "Choose a player then roll:\n" +
 	"That player gains ¢ equal to the Dice roll."
-const holyMantleDesc = "If a player would die, prevent death and end that player's turn."
+const holyMantleDesc = "If a player would die, prevent deathPenalty and end that player's turn."
 const darkArtsDesc = "When anyone rolls a 6, gain 3¢.\n" +
 	"Each time another player dies, lArea 2."
 const infestationDesc = "lArea 2, then discardPile 1 lArea baseCard."

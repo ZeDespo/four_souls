@@ -190,6 +190,176 @@ func (as activeSlot) Size() int {
 	return len(as)
 }
 
+// Very similar to a linked list deckNode, except the top pointer to the end of the list
+type eventNode struct {
+	id    uint
+	event event
+	next  *eventNode
+	top   *eventNode // Points to the top of the stack (head points to tail)
+}
+
+func (en eventNode) checkActivateItemEvent() error {
+	var err = errors.New("not an activate item event")
+	if activate, ok := en.event.e.(activateEvent); ok {
+		if _, ok := activate.c.(*treasureCard); ok {
+			err = nil
+		}
+	}
+	return err
+}
+
+func (p player) checkAttackingPlayer() error {
+	var err error
+	if !p.inBattle {
+		err = errors.New("not the attacking player")
+	}
+	return err
+}
+
+func (en eventNode) checkAttackRoll(expected uint8, nextEn eventNode) error {
+	var err error
+	if err = en.checkDiceRoll(expected); err == nil {
+		if _, ok := nextEn.event.e.(declareAttackEvent); !ok {
+			err = errors.New("not an attack dice roll")
+		}
+	}
+	return err
+}
+
+// Check if the monster dealt damage ONLY
+func (en eventNode) checkDamageFromMonster(mId uint16) (damageEvent, error) {
+	var damage damageEvent
+	var ok bool
+	var err = errors.New("not a damage from monster event")
+	if damage, ok = en.event.e.(damageEvent); ok {
+		if damage.monster != nil {
+			if mId == 0 || damage.monster.id == mId {
+				err = nil
+			}
+		}
+	}
+	return damage, err
+}
+
+// Check if an event deckNode is a "damage to player's character" event.
+func (en eventNode) checkDamageToPlayer(cId uint16) (damageEvent, error) {
+	var damage damageEvent
+	var ok bool
+	var err = errors.New("not a damage to self event")
+	if damage, ok = en.event.e.(damageEvent); ok {
+		if damage.target.getId() == cId {
+			err = nil
+		}
+	}
+	return damage, err
+}
+
+// Check if a monster dealt damage to a specific player based off their ids.
+func (en eventNode) checkDamageToPlayerFromMonster(cId, mId uint16) (damageEvent, error) {
+	damage, err := en.checkDamageToPlayer(cId)
+	if err == nil && damage.monster != nil {
+		err = errors.New("not a damage event due to combat")
+		if damage.monster.id == mId {
+			err = nil
+		}
+	}
+	return damage, err
+}
+
+// Check if damage to some monster occurred
+func (en eventNode) checkDamageToMonster() (damageEvent, error) {
+	var damage damageEvent
+	var ok bool
+	var err = errors.New("not a damage to monster event")
+	if damage, ok = en.event.e.(damageEvent); ok {
+		if _, ok = damage.target.(*monsterCard); ok {
+			err = nil
+		}
+	}
+	return damage, err
+}
+
+// Check if a specific monster took some kind of damage
+func (en eventNode) checkDamageToSpecificMonster(id uint16) (damageEvent, error) {
+	var damage damageEvent
+	var err = errors.New("not a damage to given monster id")
+	if damage, err = en.checkDamageToMonster(); err == nil {
+		if damage.target.getId() != id {
+			err = errors.New("not a damage to given monster id")
+		}
+	}
+	return damage, err
+}
+
+func (en eventNode) checkDeath(p *player) error {
+	err := errors.New("not a deathPenalty to self event")
+	if _, ok := en.event.e.(deathOfCharacterEvent); ok {
+		if p != nil {
+			if en.event.p.Character.id == p.Character.id {
+				err = nil
+			}
+		}
+		err = nil
+	}
+	return err
+}
+
+func (en eventNode) checkDeclareAttack(p *player) (declareAttackEvent, error) {
+	var declareAttack declareAttackEvent
+	var ok bool
+	var err = errors.New("not a declare attack event")
+	if declareAttack, ok = en.event.e.(declareAttackEvent); ok {
+		if en.event.p.Character.id == p.Character.id {
+			err = nil
+		}
+	}
+	return declareAttack, err
+}
+
+func (en eventNode) checkDiceRoll(expected uint8) error {
+	var dre diceRollEvent
+	var ok bool
+	var err = errors.New("not a valid dice roll event")
+	if dre, ok = en.event.e.(diceRollEvent); ok {
+		if expected == 0 || dre.n == expected {
+			err = nil
+		}
+	}
+	return err
+}
+
+func (en eventNode) checkEndOfTurn(p *player) error {
+	var ok bool
+	var err = errors.New("not a valid end of turn event")
+	if _, ok = en.event.e.(endTurnEvent); ok {
+		if en.event.p.Character.id == p.Character.id {
+			err = nil
+		}
+	}
+	return err
+}
+
+func (en eventNode) checkIntentionToAttack() (intentionToAttackEvent, error) {
+	var intention intentionToAttackEvent
+	var err = errors.New("not an intention to attack event")
+	var ok bool
+	if intention, ok = en.event.e.(intentionToAttackEvent); ok {
+		err = nil
+	}
+	return intention, err
+}
+
+func (en eventNode) checkStartOfTurn(p *player) error {
+	var ok bool
+	var err = errors.New("not a valid start turn event")
+	if _, ok = en.event.e.(startOfTurnEvent); ok {
+		if en.event.p.Character.id == p.Character.id {
+			err = nil
+		}
+	}
+	return err
+}
+
 // Although it's called a stack, it mostly behaves like a linked list.
 // Cards such as Dice Shard, Soul Heart, and Book of Belial can
 // manipulate certain events placed anywhere on the stack.
@@ -201,15 +371,7 @@ type eventStack struct {
 	size      uint // the current size of the stack
 }
 
-// Very similar to a linked list deckNode, except the top pointer to the end of the list
-type eventNode struct {
-	id    uint
-	event event
-	next  *eventNode
-	top   *eventNode // Points to the top of the stack (head points to tail)
-}
-
-// Add or subtractUint8 a value from a diceroll on the event stack
+// Add or subtract a value from a diceroll on the event stack
 // n int8: The positive or negative value to apply to the diceroll
 // rollNode *eventNode: The deckNode containing the dice roll event.
 func (es *eventStack) addToDiceRoll(n int8, rollNode *eventNode) {
@@ -222,7 +384,7 @@ func (es *eventStack) addToDiceRoll(n int8, rollNode *eventNode) {
 		}
 		rollNode.event.e = diceRollEvent{n: uint8(x)}
 	} else {
-		panic("not a deckNode that contains a dice roll.")
+		panic("not a node that contains a dice roll.")
 	}
 }
 
@@ -236,6 +398,14 @@ func (es *eventStack) fizzle(en *eventNode) error {
 		en.event.e = fizzledEvent{}
 	}
 	return err
+}
+
+func (es eventStack) isEmpty() bool {
+	var b bool
+	if es.head == nil {
+		b = true
+	}
+	return b
 }
 
 func (es *eventStack) peek() *eventNode {
@@ -287,7 +457,7 @@ func (es *eventStack) push(event event) {
 // Prevent damage on a damage deckNode.
 // Return an error if the deckNode is not a damage deckNode or if the deckNode is not on the event stack
 func (es *eventStack) preventDamage(i uint8, damageNode *eventNode) error {
-	var err = errors.New("not a damage deckNode")
+	var err = errors.New("not a damage node")
 	if oldEvent, ok := damageNode.event.e.(damageEvent); ok {
 		x := oldEvent.n - i
 		if x == 0 {
@@ -301,7 +471,7 @@ func (es *eventStack) preventDamage(i uint8, damageNode *eventNode) error {
 }
 
 func (es *eventStack) search(id uint) (*eventNode, error) {
-	curr, err := es.head.top, errors.New("deckNode not found")
+	curr, err := es.head.top, errors.New("node not found")
 	for curr != nil {
 		if curr.id == id {
 			err = nil

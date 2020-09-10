@@ -147,8 +147,8 @@ func showTreasureCards(items interface{}, owner string, offset int) {
 	writeToStdout(s)
 }
 
-func (c characterCard) header() string {
-	return "\tIndex\tName\thp\tap\tSoul Hearts\ttriggered\n"
+func (cc characterCard) header() string {
+	return "\tIndex\tName\thp\tap\tSoul Hearts\ttapped\n"
 }
 
 func headerEventStack() string {
@@ -159,9 +159,9 @@ func (lc lootCard) header() string {
 	return fmt.Sprintf("\tIndex\tName\tTrinket\n")
 }
 
-func (m monsterCard) header() string {
+func (mc monsterCard) header() string {
 	var s = fmt.Sprintf("\tIndex\tName")
-	if m.baseHealth > 0 {
+	if mc.baseHealth > 0 {
 		s = fmt.Sprintf("\t%s\t%s\t%s\t%s\n", "hp", "ap", "roll", "Reward")
 	} else {
 		s += "\n"
@@ -183,8 +183,8 @@ func (p player) showCard(idx int) string {
 		idx, p.Character.name, p.Character.hp, p.Character.ap, p.Pennies, p.Souls, p.ActiveItems, p.PassiveItems)
 }
 
-func (c characterCard) showCard(idx int) string {
-	return fmt.Sprintf("\t%d\t%s\t%d\t%d\t%t", idx, c.name, c.hp, c.ap, c.triggered)
+func (cc characterCard) showCard(idx int) string {
+	return fmt.Sprintf("\t%d\t%s\t%d\t%d\t%t", idx, cc.name, cc.hp, cc.ap, cc.tapped)
 }
 
 func (lc lootCard) showCard(idx int) string {
@@ -196,10 +196,10 @@ func (lc lootCard) showCard(idx int) string {
 	return fmt.Sprintf("\t%d\t%s\t%t\n", idx, lc.name, lc.trinket)
 }
 
-func (m monsterCard) showCard(idx int) string {
-	var s = fmt.Sprintf("\t%d\t%s", idx, m.name)
-	if m.baseHealth > 0 {
-		s += fmt.Sprintf("\t%d\t%d\t%d\n", m.hp, m.ap, m.roll)
+func (mc monsterCard) showCard(idx int) string {
+	var s = fmt.Sprintf("\t%d\t%s", idx, mc.name)
+	if mc.baseHealth > 0 {
+		s += fmt.Sprintf("\t%d\t%d\t%d\n", mc.hp, mc.ap, mc.roll)
 	} else {
 		s += "\n"
 	}
@@ -208,7 +208,7 @@ func (m monsterCard) showCard(idx int) string {
 
 func (tc treasureCard) showCard(idx int) string {
 	return fmt.Sprintf("\tc%d\tc%s\tc%tc\tc%tc\tc%tc\tc%tc\tc%tc\tc%d\n", idx, tc.name, tc.eternal, tc.active, tc.paid,
-		tc.passive, tc.triggered, tc.counters)
+		tc.passive, tc.tapped, tc.counters)
 }
 
 func (en eventNode) showEvent(idx int) string {
@@ -224,7 +224,7 @@ func (en eventNode) showEvent(idx int) string {
 	case declareAttackEvent:
 		name, eventType = value.(declareAttackEvent).m.name, "Attack Monster"
 	case declarePurchaseEvent:
-		name, eventType = value.(declarePurchaseEvent).t.name, "Buy Item"
+		eventType = "Buy Item"
 	case intentionToAttackEvent:
 		eventType = "Starting Attack Phase"
 	case intentionToPurchaseEvent:
@@ -232,11 +232,11 @@ func (en eventNode) showEvent(idx int) string {
 	case lootCardEvent:
 		name, eventType = value.(lootCardEvent).l.name, "Hand Activation"
 	case paidItemEvent:
-		name, eventType = value.(paidItemEvent).t.name, "paid Item triggered"
+		name, eventType = value.(paidItemEvent).t.name, "paid Item tapped"
 	case diceRollEvent:
 		eventType = fmt.Sprintf("Rolled %d", value.(diceRollEvent).n)
 	case triggeredEffectEvent:
-		name, eventType = value.(triggeredEffectEvent).c.getName(), "triggered effect"
+		name, eventType = value.(triggeredEffectEvent).c.getName(), "tapped effect"
 	}
 	return fmt.Sprintf("\t%d\t%s\t%s\n", idx, name, eventType)
 }

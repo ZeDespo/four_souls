@@ -39,11 +39,11 @@ func (b *Board) activateActiveItem(p *player, tc *treasureCard) error {
 		var f cardEffect
 		var specialCondition bool
 		if f, specialCondition, err = tc.f(p, b, tc); err == nil {
-			tc.triggered = tc.active
+			tc.tapped = tc.active
 			if specialCondition && tc.id == guppysPaw {
 				defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 1}})
 			} else if specialCondition && (tc.id == theBone || tc.id == techX) { // specialCondition = paid event used
-				tc.triggered = false
+				tc.tapped = false
 			} else if specialCondition {
 				defer b.rollDiceAndPush()
 			}

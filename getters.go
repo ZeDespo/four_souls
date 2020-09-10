@@ -28,8 +28,7 @@ func (p player) getActiveItems(getEternal bool) []*treasureCard {
 	var cards = make([]*treasureCard, 0, len(p.ActiveItems))
 	for i := range p.ActiveItems {
 		c := &p.ActiveItems[i]
-		if c.active && (getEternal || (!getEternal && !c.eternal)) {
-			c := &p.ActiveItems[i]
+		if getEternal || (!getEternal && !c.eternal) {
 			cards = append(cards, c)
 		}
 	}
@@ -51,15 +50,6 @@ func (es eventStack) getActivateItemEvents() []*eventNode {
 	return nodes
 }
 
-// Get a pointer to all active monsters
-func (m mArea) getActiveMonsters() []*monsterCard {
-	monsters := make([]*monsterCard, len(m.zones))
-	for i := range m.zones {
-		monsters[i] = m.zones[i].peek()
-	}
-	return monsters
-}
-
 // Get the index of a monster whose id matches the id param.
 // Required for cards like Bomb! that require the monster to
 // be on the field for it to activate.
@@ -74,6 +64,27 @@ func (m mArea) getActiveMonster(id uint16) (uint8, *monsterCard) {
 		}
 	}
 	return i, c
+}
+
+// Get a pointer to all active monsters
+func (m mArea) getActiveMonsters() []*monsterCard {
+	monsters := make([]*monsterCard, len(m.zones))
+	for i := range m.zones {
+		monsters[i] = m.zones[i].peek()
+	}
+	return monsters
+}
+
+func (m mArea) getActiveMonsterInBattle() *monsterCard {
+	var monster *monsterCard
+	for i := range m.zones {
+		c := m.zones[i].peek()
+		if c.inBattle {
+			monster = c
+			break
+		}
+	}
+	return monster
 }
 
 // Return the active player
@@ -118,8 +129,8 @@ func (p player) getAllItems(getEternal bool) []itemCard {
 	return items
 }
 
-func (b Board) getAllPassiveItems(getEternal bool) []passiveItem {
-	var items []passiveItem
+func (b Board) getAllPassiveItems(getEternal bool) []*passiveItem {
+	items := make([]*passiveItem, 0)
 	for _, p := range b.getPlayers(false) {
 		items = append(items, p.getPassiveItems(getEternal)...)
 	}
@@ -224,18 +235,6 @@ func (es eventStack) getDamageOfMonsterEvents() []*eventNode {
 		}
 	}
 	return valid
-}
-
-// Get all active items whose effects have been used since the player's last turn.
-func (p *player) getDeactivatedItems() []*treasureCard {
-	items := make([]*treasureCard, 0, len(p.ActiveItems))
-	for i := range p.ActiveItems {
-		item := &p.ActiveItems[i]
-		if item.active && item.triggered {
-			items = append(items, item)
-		}
-	}
-	return items
 }
 
 func (es eventStack) getDeathOfCharacterEvents() []*eventNode {
@@ -485,11 +484,11 @@ func (es eventStack) getPaidItemEvents() []*eventNode {
 	return nodes
 }
 
-func (p player) getPassiveItems(getEternal bool) []passiveItem {
-	var cards = make([]passiveItem, 0, len(p.PassiveItems))
+func (p player) getPassiveItems(getEternal bool) []*passiveItem {
+	var cards = make([]*passiveItem, 0, len(p.PassiveItems))
 	for i := range p.PassiveItems {
 		if getEternal || (!getEternal && !p.PassiveItems[i].isEternal()) {
-			c := p.PassiveItems[i]
+			c := &p.PassiveItems[i]
 			cards = append(cards, c)
 		}
 	}
@@ -500,7 +499,7 @@ func (p player) getPlayerActions(isActivePlayer bool, emptyEs bool) []actionReac
 	actions := make([]actionReaction, 0, 6)
 	if isActivePlayer {
 		if p.numLootPlayed > 0 {
-			actions = append(actions, actionReaction{msg: "Play a Loot value from your hand", value: playLootCard})
+			actions = append(actions, actionReaction{msg: "Play a Loot Card from your hand", value: playLootCard})
 		}
 		var shopCost int8 = 10
 		if _, err := p.getItemIndex(steamySale, true); err == nil {
@@ -509,27 +508,27 @@ func (p player) getPlayerActions(isActivePlayer bool, emptyEs bool) []actionReac
 		if _, ok := p.activeEffects[creditCard]; ok {
 			shopCost = 0
 		}
-		if p.Pennies > shopCost {
+		if p.Pennies > shopCost && emptyEs {
 			actions = append(actions, actionReaction{msg: "Buy an Item from the Shop", value: buyItem})
 		}
-		if p.numAttacks > 0 {
+		if p.numAttacks > 0 && emptyEs {
 			actions = append(actions, actionReaction{msg: "Attack!", value: attackMonster})
 		}
 	}
-	if !p.Character.triggered {
+	if !p.Character.tapped {
 		m := fmt.Sprintf("Activate Character Card (%s)", p.Character.name)
 		actions = append(actions, actionReaction{msg: m, value: activateCharacter})
 	}
-	if len(p.ActiveItems) > 0 { // TODO check conditions for active items to activate
+	if len(p.getUsableActiveItems()) > 0 { // TODO check conditions for active items to activate
 		actions = append(actions, actionReaction{msg: "Activate an Item", value: activateItem})
 	}
 	if _, err := p.getItemIndex(theresOptions, true); err == nil {
-		actions = append(actions, actionReaction{msg: "peek at the Treasure deck", value: peekTheresOptions})
+		actions = append(actions, actionReaction{msg: "Peek at the Treasure deck", value: peekTheresOptions})
 	}
-	if isActivePlayer {
+	if isActivePlayer && !p.inBattle {
 		actions = append(actions, actionReaction{msg: "End your turn", value: endActivePlayerTurn})
-	} else {
-		actions = append(actions, actionReaction{msg: "Don't respond", value: doNothing})
+	} else if !isActivePlayer {
+		actions = append(actions, actionReaction{msg: "Do nothing", value: doNothing})
 	}
 	return actions
 }
@@ -602,11 +601,11 @@ func (p player) getSoulIndex(id uint16) (uint8, error) {
 	return i, err
 }
 
-func (p player) getTriggeredActiveItems() []*treasureCard {
+func (p player) getTappedActiveItems() []*treasureCard {
 	var cards = make([]*treasureCard, 0, len(p.ActiveItems))
 	for i := range p.ActiveItems {
 		c := &p.ActiveItems[i]
-		if c.active && c.triggered {
+		if c.active && c.tapped {
 			cards = append(cards, c)
 		}
 	}
@@ -625,6 +624,25 @@ func (es eventStack) getTriggeredEffectEvents() []*eventNode {
 		}
 	}
 	return nodes
+}
+
+// TODO: Add a requirement function to each card to see if it can be activated
+func (p player) getUsableActiveItems() []*treasureCard {
+	var cards = make([]*treasureCard, 0, len(p.ActiveItems))
+	for i := range p.ActiveItems {
+		c := &p.ActiveItems[i]
+		if c.active && c.paid {
+			// TODO check if can be activated
+			cards = append(cards, c)
+		} else if c.active && !c.tapped {
+			// TODO check if can be activated
+			cards = append(cards, c)
+		} else { // if c.paid
+			// TODO check if can be activated
+			cards = append(cards, c)
+		}
+	}
+	return cards
 }
 
 func getValidGuppyItems() map[uint16]struct{} {

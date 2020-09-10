@@ -102,6 +102,7 @@ func blackBonyReward(b *Board) (cardEffect, bool) {
 	return rewardLootHelper(b, 0)
 }
 
+// Basic enemy
 // When this dies, it deals 1 damage to all players.
 func boomFlyDeath(p *player, b *Board, mCard card) (cardEffect, bool, error) {
 	return func(roll uint8) {
@@ -740,7 +741,7 @@ func holyMomsEyeEvent(p *player, b *Board, mCard card, en *eventNode) (cardEffec
 	var f cardEffect
 	var err error
 	if err = en.checkDiceRoll(2); err == nil {
-		items := p.getTriggeredActiveItems()
+		items := p.getTappedActiveItems()
 		l := len(items)
 		if l > 0 {
 			showTreasureCards(items, "self", 0)

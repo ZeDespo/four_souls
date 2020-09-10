@@ -63,168 +63,6 @@ func (p *player) bumboAddCounterHelper(bumboTC *treasureCard, n int8) {
 	}
 }
 
-func (en eventNode) checkActivateItemEvent() error {
-	var err = errors.New("not an activate item event")
-	if activate, ok := en.event.e.(activateEvent); ok {
-		if _, ok := activate.c.(*treasureCard); ok {
-			err = nil
-		}
-	}
-	return err
-}
-
-func (p player) checkAttackingPlayer() error {
-	var err error
-	if !p.inBattle {
-		err = errors.New("not the attacking player")
-	}
-	return err
-}
-
-func (en eventNode) checkAttackRoll(expected uint8, nextEn eventNode) error {
-	var err error
-	if err = en.checkDiceRoll(expected); err == nil {
-		if _, ok := nextEn.event.e.(declareAttackEvent); !ok {
-			err = errors.New("not an attack dice roll")
-		}
-	}
-	return err
-}
-
-// Check if the monster dealt damage ONLY
-func (en eventNode) checkDamageFromMonster(mId uint16) (damageEvent, error) {
-	var damage damageEvent
-	var ok bool
-	var err = errors.New("not a damage from monster event")
-	if damage, ok = en.event.e.(damageEvent); ok {
-		if damage.monster != nil {
-			if mId == 0 || damage.monster.id == mId {
-				err = nil
-			}
-		}
-	}
-	return damage, err
-}
-
-// Check if an event deckNode is a "damage to player's character" event.
-func (en eventNode) checkDamageToPlayer(cId uint16) (damageEvent, error) {
-	var damage damageEvent
-	var ok bool
-	var err = errors.New("not a damage to self event")
-	if damage, ok = en.event.e.(damageEvent); ok {
-		if damage.target.getId() == cId {
-			err = nil
-		}
-	}
-	return damage, err
-}
-
-// Check if a monster dealt damage to a specific player based off their ids.
-func (en eventNode) checkDamageToPlayerFromMonster(cId, mId uint16) (damageEvent, error) {
-	damage, err := en.checkDamageToPlayer(cId)
-	if err == nil && damage.monster != nil {
-		err = errors.New("not a damage event due to combat")
-		if damage.monster.id == mId {
-			err = nil
-		}
-	}
-	return damage, err
-}
-
-// Check if damage to some monster occurred
-func (en eventNode) checkDamageToMonster() (damageEvent, error) {
-	var damage damageEvent
-	var ok bool
-	var err = errors.New("not a damage to monster event")
-	if damage, ok = en.event.e.(damageEvent); ok {
-		if _, ok = damage.target.(*monsterCard); ok {
-			err = nil
-		}
-	}
-	return damage, err
-}
-
-// Check if a specific monster took some kind of damage
-func (en eventNode) checkDamageToSpecificMonster(id uint16) (damageEvent, error) {
-	var damage damageEvent
-	var err = errors.New("not a damage to given monster id")
-	if damage, err = en.checkDamageToMonster(); err == nil {
-		if damage.target.getId() != id {
-			err = errors.New("not a damage to given monster id")
-		}
-	}
-	return damage, err
-}
-
-func (en eventNode) checkDeath(p *player) error {
-	err := errors.New("not a death to self event")
-	if _, ok := en.event.e.(deathOfCharacterEvent); ok {
-		if p != nil {
-			if en.event.p.Character.id == p.Character.id {
-				err = nil
-			}
-		}
-		err = nil
-	}
-	return err
-}
-
-func (en eventNode) checkDeclareAttack(p *player) (declareAttackEvent, error) {
-	var declareAttack declareAttackEvent
-	var ok bool
-	var err = errors.New("not a declare attack event")
-	if declareAttack, ok = en.event.e.(declareAttackEvent); ok {
-		if en.event.p.Character.id == p.Character.id {
-			err = nil
-		}
-	}
-	return declareAttack, err
-}
-
-func (en eventNode) checkDiceRoll(expected uint8) error {
-	var dre diceRollEvent
-	var ok bool
-	var err = errors.New("not a valid dice roll event")
-	if dre, ok = en.event.e.(diceRollEvent); ok {
-		if expected == 0 || dre.n == expected {
-			err = nil
-		}
-	}
-	return err
-}
-
-func (en eventNode) checkEndOfTurn(p *player) error {
-	var ok bool
-	var err = errors.New("not a valid end of turn event")
-	if _, ok = en.event.e.(endTurnEvent); ok {
-		if en.event.p.Character.id == p.Character.id {
-			err = nil
-		}
-	}
-	return err
-}
-
-func (en eventNode) checkIntentionToAttack() (intentionToAttackEvent, error) {
-	var intention intentionToAttackEvent
-	var err = errors.New("not an intention to attack event")
-	var ok bool
-	if intention, ok = en.event.e.(intentionToAttackEvent); ok {
-		err = nil
-	}
-	return intention, err
-}
-
-func (en eventNode) checkStartOfTurn(p *player) error {
-	var ok bool
-	var err = errors.New("not a valid start turn event")
-	if _, ok = en.event.e.(startOfTurnEvent); ok {
-		if en.event.p.Character.id == p.Character.id {
-			err = nil
-		}
-	}
-	return err
-}
-
 // Helper for Dagaz.
 // Activate the curse destruction card by selecting which
 // curse to destroy. Return a function that will destroy the selected
@@ -249,38 +87,6 @@ func (p *player) dagazCurseHelper(m *mArea, l int) lootCardEffect {
 	}
 }
 
-// Helper to any action / effect that damages a monster.
-// search the zone to make sure the monster is in play, then push damage to the monster.
-func (b *Board) damagePlayerToMonster(p *player, target *monsterCard, n uint8, combatRoll uint8) {
-	if !target.isDead() {
-		if (target.id == carrionQueen && combatRoll != 6) || (target.id == pin && combatRoll == 6) {
-			n = 0
-		}
-		b.eventStack.push(event{p: p, e: damageEvent{target: target, n: n}, roll: combatRoll})
-		if target.id == theDukeOfFlies {
-			b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: target, f: theDukeOfFliesEvent(b.eventStack.peek())}})
-			b.rollDiceAndPush()
-		}
-	}
-}
-
-func (b *Board) damageMonsterToPlayer(m *monsterCard, target *player, n uint8, combatRoll uint8) {
-	if !target.isDead() {
-		b.eventStack.push(event{p: target, e: damageEvent{monster: m, target: target, n: n}, roll: combatRoll})
-		b.preventDamageHelper(target, b.eventStack.peek())
-	}
-}
-
-// p *player: the player that pushed the event to the stack, if applicable (monster attack)
-// target *player: the subject of the damage
-// n uint8: how much damage to inflict
-func (b *Board) damagePlayerToPlayer(p, target *player, n uint8) {
-	if !target.isDead() { // Not dead
-		b.eventStack.push(event{p: p, e: damageEvent{target: target, n: n}})
-		b.preventDamageHelper(p, b.eventStack.peek())
-	}
-}
-
 func (b *Board) preventDamageHelper(p *player, damageNode *eventNode) {
 	damagePrevention := [2]uint16{guppysHairball, theDeadCat}
 	for _, id := range damagePrevention {
@@ -302,22 +108,6 @@ func (b *Board) preventDamageHelper(p *player, damageNode *eventNode) {
 			}
 		}
 	}
-}
-
-// Helper for all active cards where you look for a generic dice roll
-func (es eventStack) diceItem() *eventNode {
-	var ans int
-	var rollNode *eventNode
-	nodes := es.getDiceRollEvents()
-	l := len(nodes)
-	if l > 0 {
-		if l > 1 {
-			showEvents(nodes)
-			ans = readInput(0, l-1)
-		}
-		rollNode = nodes[ans]
-	}
-	return rollNode
 }
 
 func (p *player) discardHandChoiceHelper(la *lArea, n uint8) {
@@ -408,72 +198,6 @@ func (b *Board) judgementHelper() (map[uint8][]*player, uint8) {
 		}
 	}
 	return soulsMap, max
-}
-
-func (b *Board) killMonster(p *player, mId uint16) {
-	if i, err := b.monster.getActiveMonster(mId); err == nil {
-		m := b.monster.zones[i].pop()
-		m.resetStats()
-		if m.f != nil {
-			if f, _, err := m.f(p, b, m); err == nil { // on death trigger
-				b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: m, f: f}})
-				if mId == ragman || mId == wrath {
-					b.rollDiceAndPush()
-				}
-			}
-		}
-		if m.isBoss {
-			b.players[b.api].addSoulToBoard(m)
-			if mId == theHaunt {
-				checkActiveEffects(b.players[b.api].activeEffects, theHaunt, true)
-			}
-		} else if m.isBoss && mId == delirium {
-			deliriumDeathHandler(m, b.monster)
-		} else {
-			b.discard(m)
-		}
-		theMidasTouchHelper(b.monster)
-		rf, rollRequired := m.rf(b)
-		b.eventStack.push(event{p: p, e: monsterRewardEvent{r: rf}})
-		if rollRequired {
-			b.rollDiceAndPush()
-		}
-		b.killMonster(p, stoney)
-		b.killMonster(p, deathsHead)
-	}
-}
-
-// Method that pushes the death event to the stack for a player
-// Here's the player's passive opportunity to prevent death and end his / her turn
-func (b *Board) killPlayer(target *player) {
-	if !target.isDead() {
-		b.eventStack.push(event{p: target, e: deathOfCharacterEvent{}})
-		deathNode := b.eventStack.peek()
-		deathPrevention := [2]uint16{brokenAnkh, guppysCollar}
-		for _, id := range deathPrevention {
-			deathPlayerPrevention(id, target, b, deathNode)
-		}
-	}
-}
-
-func deathPlayerPrevention(id uint16, p *player, b *Board, en *eventNode) {
-	var f cardEffect
-	var err error
-	var i uint8
-	if _, ok := en.event.e.(deathOfCharacterEvent); ok { // No need to perform if event's already fizzled
-		if i, err = p.getItemIndex(id, true); err == nil && (id == brokenAnkh || id == guppysCollar) {
-			f = func(roll uint8) {
-				if (id == brokenAnkh && roll == 6) || (id == guppysCollar && roll >= 1 && roll <= 3) {
-					en.event.e = fizzledEvent{}
-					if err := p.isActivePlayer(b); err == nil {
-						b.forceEndOfTurn()
-					}
-				}
-			}
-			b.eventStack.push(event{p: p, e: triggeredEffectEvent{c: p.PassiveItems[i], f: f}})
-			b.rollDiceAndPush()
-		}
-	}
 }
 
 // Helper for cains eye, golden horse Shoe, and Purple Heart
@@ -593,6 +317,18 @@ func modifyAttack(p *player, n uint8, leavingField bool) {
 		if p.Character.ap > p.Character.baseAttack {
 			p.decreaseAP(n)
 		}
+	}
+}
+
+// No dice roll can be below 1 or above 6.
+// This helper function assures any additions or subtractions
+// will keep the dice within these bounds.
+func modifyDiceRoll(originalRoll *uint8, x int8) {
+	y := int8(*originalRoll) + x
+	if y > 6 {
+		y = 6
+	} else if y < 1 {
+		y = 1
 	}
 }
 

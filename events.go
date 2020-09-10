@@ -1,6 +1,9 @@
 package four_souls
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 type eventHolder interface {
 	eHolder()
@@ -37,10 +40,7 @@ func (d declareAttackEvent) eHolder() {}
 
 // Declare a target for purchase form the shop
 // Will always follow the intention to purchase
-type declarePurchaseEvent struct {
-	i uint8
-	t treasureCard
-}
+type declarePurchaseEvent struct{}
 
 func (d declarePurchaseEvent) eHolder() {}
 
@@ -107,8 +107,8 @@ type startOfTurnEvent struct{}
 
 func (s startOfTurnEvent) eHolder() {}
 
-// Any cardEffect that has triggered during play
-// A passive itemCard, monster / monster death, or trinket
+// Any cardEffect that has tapped during play
+// A passive itemCard, monster / monster deathPenalty, or trinket
 type triggeredEffectEvent struct {
 	c card
 	f cardEffect
@@ -122,38 +122,63 @@ type event struct {
 	roll uint8       // Holds the dice roll value for the event
 }
 
-// TODO centralize all pushes to the stack and implement passive effect resolvement!
-//func (b *Board) pushEventToStack(p *player, eh eventHolder) error {
-//	event := event{p: p, e: eh}
-//	switch eh.(type) {
-//	case intentionToAttackEvent:
-//		m := eh.(intentionToAttackEvent)
-//
-//	}
-//}
+func (b *Board) checkActiveMonsterPassives(en *eventNode) []event {
+	events := make([]event, 0)
+	for _, am := range b.monster.getActiveMonsters() {
+		events = append(events, am.trigger(en.event.p, b, en)...)
+	}
+	return events
+}
 
-// pop an event off of the event stack
-// and alter the game's state based off the
-// action pushed.
+func (b *Board) checkCursePassives(en *eventNode) []event {
+	events := make([]event, 0)
+	p := en.event.p
+	for _, curse := range p.Curses {
+		events = append(events, curse.trigger(p, b, en)...)
+	}
+	return events
+}
 
-// TODO: search for monster's id before resolving monster damage. If in play, inflict damage. Else, don't.
+func (b *Board) checkPlayerPassives(en *eventNode, startOrEndOfTurn bool) []event {
+	events := make([]event, 0)
+	if !startOrEndOfTurn {
+		for _, p := range b.getPlayers(false) {
+			for i := range p.getPassiveItems(true) {
+				events = append(events, p.PassiveItems[i].trigger(p, b, en)...)
+			}
+		}
+	} else {
+		p := b.getActivePlayer()
+		for i := range p.getPassiveItems(true) {
+			events = append(events, p.PassiveItems[i].trigger(p, b, en)...)
+		}
+	}
+	return events
+}
+
 func (b *Board) resolve() error {
-	var err error = errors.New("no deckNode on stack")
-	var node *eventNode
+	err := errors.New("no eventNode on stack")
 	es := &b.eventStack
-	node = es.pop()
+	triggeredEvents := make([]event, 0)
+	node := es.pop()
 	if node != nil {
 		p, ev, roll := node.event.p, node.event.e, node.event.roll
 		switch ev.(type) {
-		case activateEvent:
-			ev.(activateEvent).f(roll)
+		case activateEvent: // Regardless of Treasure card or character
+			eh := ev.(activateEvent)
+			eh.f(roll)
+			if _, ok := eh.c.(*treasureCard); ok {
+				if i, err := p.getItemIndex(shinyRock, true); err == nil {
+					triggeredEvents = append(triggeredEvents, p.PassiveItems[i].trigger(p, b, node)...)
+				}
+			}
 		case damageEvent:
 			e := ev.(damageEvent)
 			if _, ok := e.target.(*monsterCard); ok {
 				if _, monster := b.monster.getActiveMonster(e.target.getId()); monster != nil && !e.target.isDead() {
 					monster.decreaseHP(e.n)
 					if monster.isDead() {
-						b.killMonster(p, monster)
+						b.killMonster(p, monster.id)
 					}
 				}
 			} else { // character value
@@ -162,29 +187,62 @@ func (b *Board) resolve() error {
 						e.target.decreaseHP(e.n)
 					}
 					if !e.target.isDead() {
-						p.damageRequiredEffects(node.next)
+						p.checkDamageRequiredEffects(node.next)
 					} else {
-						b.eventStack.push(event{p: p, e: deathOfCharacterEvent{}})
+						b.killPlayer(p)
 					}
 				}
 			}
+			triggeredEvents = append(triggeredEvents, b.checkActiveMonsterPassives(node)...)
+			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, false)...)
 		case deathOfCharacterEvent:
-			p.death(b)
+			p.deathPenalty(b)
+			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, false)...)
 		case declareAttackEvent:
-			e := ev.(declareAttackEvent)
-			b.battle(p, e.m, roll)
+			b.battle(p, ev.(declareAttackEvent).m, roll)
+			triggeredEvents = append(triggeredEvents, b.checkActiveMonsterPassives(node)...)
+			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, false)...)
 		case declarePurchaseEvent:
-			e := ev.(declarePurchaseEvent)
-			err = b.treasure.buyFromShop(p, e.i)
+			showTreasureCards(b.treasure.zones, "shop", 0)
+			err = b.treasure.buyFromShop(p, uint8(readInput(0, len(b.treasure.zones)-1)))
 		case diceRollEvent:
 			e := ev.(diceRollEvent)
 			b.eventStack.peek().event.roll = e.n // safe to do this. dice rolls are not isolated events
 			if len(b.treasure.crystalBallGuess) > 0 {
 				b.treasure.checkCrystalBall(e.n, b.loot)
 			}
+			triggeredEvents = append(triggeredEvents, b.checkActiveMonsterPassives(node)...)
+			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, false)...)
+		case endTurnEvent:
+			for _, p := range b.getPlayers(true) {
+				p.resetStats(p.isActivePlayer(b))
+			}
+			b.api = (b.api + 1) % uint8(len(b.players))
+			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, true)...)
+			triggeredEvents = append(triggeredEvents, b.checkCursePassives(node)...)
 		case intentionToAttackEvent:
-			p.inBattle = true
-			ev.(intentionToAttackEvent).m.inBattle = true
+			e := ev.(intentionToAttackEvent)
+			p.numAttacks -= 1
+			if e.m != nil { // Attack an actual monster
+				p.inBattle, e.m.inBattle = true, true
+				triggeredEvents = append(triggeredEvents, b.checkActiveMonsterPassives(node)...)
+				if i, err := p.getItemIndex(babyHaunt, true); err == nil {
+					triggeredEvents = append(triggeredEvents, p.PassiveItems[i].trigger(p, b, node)...)
+				}
+			} else { // Attack the monster deck. May or may not be a monster
+				m := b.monster.draw()
+				m.showCard(0)
+				if !m.isBonusCard() {
+					p.inBattle, m.inBattle = true, true
+					showMonsterCards(b.monster.getActiveMonsters(), 0)
+					fmt.Print("Overlay over which monster?")
+					b.monster.zones[readInput(0, len(b.monster.zones))].push(m)
+				} else {
+					err = m.activate(&b.players[b.api], b)
+				}
+			}
+		case intentionToPurchaseEvent:
+			triggeredEvents = append(triggeredEvents, event{p: p, e: declarePurchaseEvent{}})
 		case lootCardEvent:
 			e := ev.(lootCardEvent)
 			_, usedBC := p.activeEffects[blankCard]
@@ -192,14 +250,38 @@ func (b *Board) resolve() error {
 			if usedBC {
 				delete(p.activeEffects, blankCard)
 			}
+		case monsterRewardEvent:
+			e := ev.(monsterRewardEvent)
+			e.r(roll)
 		case paidItemEvent:
 			e := ev.(paidItemEvent)
 			e.f(roll)
+		case startOfTurnEvent:
+			p.Character.tapped = false
+			for _, ai := range p.getActiveItems(true) {
+				ai.recharge()
+			}
+			p.loot(b.loot)
+			firstTimeIds := map[uint16]struct{}{curvedHorn: {}, bumbo: {}, championBelt: {}, theHabit: {}, polydactyly: {}}
+			for _, c := range p.PassiveItems {
+				id := c.getId()
+				if _, ok := firstTimeIds[id]; ok {
+					if (id == bumbo && c.getCounters() > 0) || id != bumbo {
+						p.activeEffects[id] = struct{}{}
+					}
+				}
+			}
+			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, true)...)
+			triggeredEvents = append(triggeredEvents, b.checkCursePassives(node)...)
 		case triggeredEffectEvent:
 			e := ev.(triggeredEffectEvent)
 			e.f(roll)
 		}
-		//triggeredEvents := b.eventDependentPassiveActivation(p, deckNode)
+		var i, max uint8 = 0, uint8(len(triggeredEvents))
+		for i = 0; i < max; i++ {
+			b.eventStack.push(triggeredEvents[i])
+			actionReactionChecker(triggeredEvents[i].p, b)
+		}
 	}
 	return err
 }

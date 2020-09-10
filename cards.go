@@ -11,6 +11,7 @@ package four_souls
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"time"
 )
@@ -28,7 +29,7 @@ type characterCard struct {
 	baseCard
 	baseHealth         uint8 // Max amount of health a character has
 	baseAttack         uint8 // baseAttack power
-	triggered          bool  // Can use play from hand quick cardEffect
+	tapped             bool  // Can use play from hand quick cardEffect
 	hp                 uint8 // Health remaining for turn. If == 0, you're dead
 	ap                 uint8 // Attack points for the turn.
 	diceModifier       uint8 // Dice modifier for non-attack rolls
@@ -93,9 +94,8 @@ type monsterCard struct {
 	inBattle   bool  // Shows if the monster is in an active battle state. True once player successfully declares numAttacks
 	isBoss     bool  // Switch for if special conditions are met
 	isCurse    bool
-	f          activator // This function will be our "on death" effect for monsters like Big Spider and Death
+	f          activator // This function will be our "on deathPenalty" effect for monsters like Big Spider and Death
 	ef         eventActivator
-	cf         continuousActivator
 	rf         rewardGiver
 }
 
@@ -113,15 +113,15 @@ type rewardGiver func(b *Board) (cardEffect, bool) // Active Player always gains
 
 type treasureCard struct {
 	baseCard
-	eternal   bool                // Starting itemCard quality. Immune to theft and destruction.
-	passive   bool                // Is the itemCard passive
-	paid      bool                // Do you need to pay a cost to activate the itemCard (not once per turn)
-	active    bool                // Do you need to activate the card
-	triggered bool                // Is the card activated?
-	counters  int8                // How many counters there are on the card.
-	f         activator           // The function for the active / paid effects
-	ef        eventActivator      // The function for event based passive effects
-	cf        continuousActivator // The function for continuous effects
+	eternal  bool                // Starting itemCard quality. Immune to theft and destruction.
+	passive  bool                // Is the itemCard passive
+	paid     bool                // Do you need to pay a cost to activate the itemCard (not once per turn)
+	active   bool                // Do you need to activate the card
+	tapped   bool                // Is the card activated?
+	counters int8                // How many counters there are on the card.
+	f        activator           // The function for the active / paid effects
+	ef       eventActivator      // The function for event based passive effects
+	cf       continuousActivator // The function for continuous effects
 }
 
 // Represents every card in the game
@@ -153,7 +153,7 @@ type itemCard interface {
 // For character and monster cards
 // These cards are the avatars for the player and
 // the game's engine. They can be buffed, weakened,
-// and succumb to death.
+// and succumb to deathPenalty.
 type combatTarget interface {
 	card
 	decreaseAP(n uint8)
@@ -171,33 +171,63 @@ type combatTarget interface {
 // Only passive treasure cards and trinket loot cards can inherit this interface!
 type passiveItem interface {
 	itemCard
-	trigger(p *player, b *Board)
+	trigger(p *player, b *Board, en *eventNode) []event
 }
 
-func (c *characterCard) activate(p *player, b *Board) error {
-	c.triggered = true
-	return nil
+// Activate a character card and allow a player to play a loot card from the hand
+func (cc *characterCard) activate(p *player, b *Board) error {
+	var err = errors.New("character card already tapped")
+	e := activateEvent{c: cc}
+	if !cc.tapped {
+		err = nil
+		e.f = func(roll uint8) {
+			l := len(p.Hand)
+			if l > 0 {
+				showLootCards(p.Hand, p.Character.name, 0)
+				fmt.Print("Play which card?")
+				ans := readInput(0, l-1)
+				err = p.Hand[ans].activate(p, b)
+			}
+		}
+		b.eventStack.push(event{p: p, e: e})
+	}
+	return err
 }
 
-// Activate the Treasure card by invoking it's activator, provided the
-// conditions are met.
-// For items that can be tapped: tap the card, then activate the effect
-// For items that need a paid cost: pay the cost, then activate the effect
-// If the card could not be activated (couldn't pay the initial cost
-// or conditions are not met), this function will
-// return an error detailing what happened.
+// Activate a monster's "on death" effect, a bonus card's
+// on draw effect, or the "give curse" helper for drawn curse cards.
+func (mc monsterCard) activate(p *player, b *Board) error {
+	var err = errors.New("not an on death monster effect, bonus card, or curse")
+	if mc.f != nil {
+		e := triggeredEffectEvent{c: mc}
+		var f cardEffect
+		var rollRequired bool
+		if f, rollRequired, err = mc.f(p, b, mc); err == nil {
+			e.f = f
+			b.eventStack.push(event{p: p, e: e})
+			if rollRequired {
+				b.rollDiceAndPush()
+			}
+		}
+	}
+	return err
+}
+
+// Activate a tappable active / paid item's effect.
+// Active item effects can only be used once per charge.
+// Paid item effects can be used as the player can pay the cost (cents, damage, etc).
 func (tc *treasureCard) activate(p *player, b *Board) error {
-	var err = errors.New("not a card that can be activated")
-	e := activateEvent{c: tc}
-	if tc.active {
+	var err = errors.New("not an active or paid item")
+	if (tc.active || tc.paid) && !tc.tapped {
+		e := activateEvent{c: tc}
 		var f cardEffect
 		var specialCondition bool
 		if f, specialCondition, err = tc.f(p, b, tc); err == nil {
-			tc.triggered = tc.active
+			tc.tapped = tc.active // If solely a paid item will default to false
 			if specialCondition && tc.id == guppysPaw {
 				defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 1}})
 			} else if specialCondition && (tc.id == theBone || tc.id == techX) { // specialCondition = paid event used
-				tc.triggered = false
+				tc.tapped = false
 			} else if specialCondition {
 				defer b.rollDiceAndPush()
 			}
@@ -224,16 +254,16 @@ func (lc lootCard) activate(p *player, b *Board) error {
 			var specialCondition bool
 			f, specialCondition, err = lc.f(p, b)
 			if err == nil {
-				if specialCondition && lc.id != temperance {
-					defer b.rollDiceAndPush()
-				} else if !specialCondition && lc.id == temperance {
-					defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 1}})
-				} else if specialCondition && lc.id == temperance {
-					defer b.eventStack.push(event{p: p, e: damageEvent{target: p, n: 2}})
-				}
+				defer b.discard(p.popHandCard(i))
 				e.f = f
-				b.discard(p.popHandCard(i))
 				b.eventStack.push(event{p: p, e: e})
+				if specialCondition && lc.id != temperance {
+					b.rollDiceAndPush()
+				} else if !specialCondition && lc.id == temperance {
+					b.damagePlayerToPlayer(p, p, 1)
+				} else if specialCondition && lc.id == temperance {
+					b.damagePlayerToPlayer(p, p, 2)
+				}
 			}
 		}
 	}
@@ -242,47 +272,47 @@ func (lc lootCard) activate(p *player, b *Board) error {
 
 // Trigger the cards without activating their effects.
 func (tc *treasureCard) deathPenalty() {
-	tc.triggered = true
+	tc.tapped = true
 }
 
 func (p *player) decreaseAP(n uint8) {
 	p.Character.ap = subtractUint8(p.Character.ap, n)
 }
 
-func (m *monsterCard) decreaseAP(n uint8) {
-	m.ap = subtractUint8(m.ap, n)
+func (mc *monsterCard) decreaseAP(n uint8) {
+	mc.ap = subtractUint8(mc.ap, n)
 }
 
 func (p *player) decreaseBaseAttack(n uint8) {
 	p.Character.baseAttack = subtractUint8(p.Character.baseAttack, n)
 }
 
-func (m *monsterCard) decreaseBaseAttack(n uint8) {
-	m.baseAttack = subtractUint8(m.baseAttack, n)
+func (mc *monsterCard) decreaseBaseAttack(n uint8) {
+	mc.baseAttack = subtractUint8(mc.baseAttack, n)
 }
 
 func (p *player) decreaseBaseHealth(n uint8) {
 	p.Character.baseHealth = subtractUint8(p.Character.baseHealth, n)
 }
 
-func (m *monsterCard) decreaseBaseHealth(n uint8) {
-	m.baseHealth = subtractUint8(m.baseHealth, n)
+func (mc *monsterCard) decreaseBaseHealth(n uint8) {
+	mc.baseHealth = subtractUint8(mc.baseHealth, n)
 }
 
 func (p *player) decreaseHP(n uint8) {
 	p.Character.hp = subtractUint8(p.Character.hp, n)
 }
 
-func (m *monsterCard) decreaseHP(n uint8) {
-	m.hp = subtractUint8(m.hp, n)
+func (mc *monsterCard) decreaseHP(n uint8) {
+	mc.hp = subtractUint8(mc.hp, n)
 }
 
 func (lc lootCard) getContinuousPassive() continuousActivator {
 	return lc.cf
 }
 
-func (m monsterCard) getContinuousPassive() continuousActivator {
-	return m.cf
+func (mc monsterCard) getContinuousPassive() continuousActivator {
+	return nil
 }
 
 func (tc treasureCard) getContinuousPassive() continuousActivator {
@@ -301,8 +331,8 @@ func (lc lootCard) getEventPassive() eventActivator {
 	return lc.ef
 }
 
-func (m monsterCard) getEventPassive() eventActivator {
-	return m.ef
+func (mc monsterCard) getEventPassive() eventActivator {
+	return mc.ef
 }
 
 func (tc treasureCard) getEventPassive() eventActivator {
@@ -313,16 +343,16 @@ func (p player) getId() uint16 {
 	return p.Character.id
 }
 
-func (c characterCard) getId() uint16 {
-	return c.id
+func (cc characterCard) getId() uint16 {
+	return cc.id
 }
 
 func (lc lootCard) getId() uint16 {
 	return lc.id
 }
 
-func (m monsterCard) getId() uint16 {
-	return m.id
+func (mc monsterCard) getId() uint16 {
+	return mc.id
 }
 
 func (tc treasureCard) getId() uint16 {
@@ -333,16 +363,16 @@ func (p player) getName() string {
 	return p.Character.name
 }
 
-func (c characterCard) getName() string {
-	return c.name
+func (cc characterCard) getName() string {
+	return cc.name
 }
 
 func (lc lootCard) getName() string {
 	return lc.name
 }
 
-func (m monsterCard) getName() string {
-	return m.name
+func (mc monsterCard) getName() string {
+	return mc.name
 }
 
 func (tc treasureCard) getName() string {
@@ -353,37 +383,37 @@ func (p *player) increaseAP(n uint8) {
 	p.Character.ap += n
 }
 
-func (m *monsterCard) increaseAP(n uint8) {
-	m.ap += n
+func (mc *monsterCard) increaseAP(n uint8) {
+	mc.ap += n
 }
 
 func (p *player) increaseBaseAttack(n uint8) {
 	p.Character.baseAttack += n
 }
 
-func (m *monsterCard) increaseBaseAttack(n uint8) {
-	m.baseAttack += n
+func (mc *monsterCard) increaseBaseAttack(n uint8) {
+	mc.baseAttack += n
 }
 
 func (p *player) increaseBaseHealth(n uint8) {
 	p.Character.baseHealth += n
 }
 
-func (m *monsterCard) increaseBaseHealth(n uint8) {
-	m.baseHealth += n
+func (mc *monsterCard) increaseBaseHealth(n uint8) {
+	mc.baseHealth += n
 }
 
 func (p *player) increaseHP(n uint8) {
 	p.Character.hp += n
 }
 
-func (m *monsterCard) increaseHP(n uint8) {
-	m.hp += n
+func (mc *monsterCard) increaseHP(n uint8) {
+	mc.hp += n
 }
 
-func (m monsterCard) isBonusCard() bool {
+func (mc monsterCard) isBonusCard() bool {
 	var isBonusCard bool
-	if m.baseHealth == 0 {
+	if mc.baseHealth == 0 {
 		isBonusCard = true
 	}
 	return isBonusCard
@@ -397,9 +427,9 @@ func (p player) isDead() bool {
 	return isDead
 }
 
-func (m monsterCard) isDead() bool {
+func (mc monsterCard) isDead() bool {
 	var isDead bool
-	if m.hp <= 0 {
+	if mc.hp <= 0 {
 		isDead = true
 	}
 	return isDead
@@ -425,13 +455,13 @@ func (tc treasureCard) isPassive() bool {
 	return tc.passive
 }
 
-func (m *monsterCard) heal(n uint8) {
-	if m.hp < m.baseHealth {
-		toHeal := m.hp + n
-		if toHeal > m.baseHealth {
-			m.hp = m.baseHealth
+func (mc *monsterCard) heal(n uint8) {
+	if mc.hp < mc.baseHealth {
+		toHeal := mc.hp + n
+		if toHeal > mc.baseHealth {
+			mc.hp = mc.baseHealth
 		} else {
-			m.hp = toHeal
+			mc.hp = toHeal
 		}
 	}
 }
@@ -456,21 +486,55 @@ func (tc *treasureCard) loseCounters(n int8) {
 
 func (p *player) modifyDiceRoll(n int8) {}
 
-func (m *monsterCard) modifyDiceRoll(n int8) {
-	modifyDiceRoll(&m.roll, n)
+func (mc *monsterCard) modifyDiceRoll(n int8) {
+	modifyDiceRoll(&mc.roll, n)
 }
 
-func (c *characterCard) recharge() {
-	c.triggered = false
+func (cc *characterCard) recharge() {
+	cc.tapped = false
 }
 
 func (tc *treasureCard) recharge() {
-	tc.triggered = false
+	if tc.active {
+		tc.tapped = false
+	}
 }
 
-func (lc lootCard) trigger(p *player, b *Board) {}
+func (mc *monsterCard) trigger(p *player, b *Board, en *eventNode) []event {
+	events := make([]event, 0, 2)
+	if mc.ef != nil {
+		events = executeEventFunction(p, b, mc, en, mc.ef)
+	}
+	return events
+}
 
-func (tc *treasureCard) trigger(p *player, b *Board) {}
+func (lc lootCard) trigger(p *player, b *Board, en *eventNode) []event {
+	events := make([]event, 0, 2)
+	if lc.isPassive() && lc.ef != nil {
+		events = executeEventFunction(p, b, lc, en, lc.ef)
+	}
+	return events
+}
+
+func (tc *treasureCard) trigger(p *player, b *Board, en *eventNode) []event {
+	events := make([]event, 0, 2)
+	if tc.passive && tc.ef != nil {
+		events = executeEventFunction(p, b, tc, en, tc.ef)
+	}
+	return events
+}
+
+func executeEventFunction(p *player, b *Board, c card, en *eventNode, ef eventActivator) []event {
+	events := make([]event, 1, 2)
+	if f, rollRequired, err := ef(p, b, c, en); err == nil && f != nil {
+		events[0] = event{p: p, e: triggeredEffectEvent{c: c, f: f}}
+		if rollRequired {
+			e, _ := b.rollDice()
+			events = append(events, event{p: p, e: e})
+		}
+	}
+	return events
+}
 
 // Initialize the characters and return only the number of characters that is required to play the game.
 func getCharacters(numPlayers uint8, useExpansionOne bool, useExpansionTwo bool) []characterCard {
@@ -525,32 +589,32 @@ func getTreasureDeck(useExpansionOne bool, useExpansionTwo bool) deck {
 // Returns cards from the character deck as a slice.
 func getCharacterCards(useExpansionOne bool, useExpansionTwo bool) []characterCard {
 	var deck = []characterCard{
-		{baseCard: baseCard{id: blueBaby, name: "Blue Baby", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: cain, name: "Cain", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: eden, name: "Eden", effect: characterEdenEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: eve, name: "Eve", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: isaac, name: "Isaac", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: judas, name: "Judas", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: lazarus, name: "Lazarus", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: lilith, name: "Lilith", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: maggy, name: "Maggy", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: samson, name: "Samson", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-		{baseCard: baseCard{id: theForgotten, name: "The Forgotten", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
+		{baseCard: baseCard{id: blueBaby, name: "Blue Baby", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: cain, name: "Cain", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: eden, name: "Eden", effect: characterEdenEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: eve, name: "Eve", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: isaac, name: "Isaac", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: judas, name: "Judas", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: lazarus, name: "Lazarus", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: lilith, name: "Lilith", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: maggy, name: "Maggy", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: samson, name: "Samson", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+		{baseCard: baseCard{id: theForgotten, name: "The Forgotten", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
 	}
 	if useExpansionOne {
 		deck = append(deck,
-			characterCard{baseCard: baseCard{id: apollyon, name: "Apollyon", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-			characterCard{baseCard: baseCard{id: azazel, name: "Azazel", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-			characterCard{baseCard: baseCard{id: theKeeper, name: "The Keeper", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-			characterCard{baseCard: baseCard{id: theLost, name: "The Lost", effect: characterEffect}, baseHealth: 1, baseAttack: 1, triggered: true},
+			characterCard{baseCard: baseCard{id: apollyon, name: "Apollyon", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+			characterCard{baseCard: baseCard{id: azazel, name: "Azazel", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+			characterCard{baseCard: baseCard{id: theKeeper, name: "The Keeper", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+			characterCard{baseCard: baseCard{id: theLost, name: "The Lost", effect: characterEffect}, baseHealth: 1, baseAttack: 1, tapped: true},
 		)
 	}
 	if useExpansionTwo {
 		deck = append(deck,
-			characterCard{baseCard: baseCard{id: bumboCharacter, name: "Bum-Bo", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-			characterCard{baseCard: baseCard{id: darkJudas, name: "Dark Judas", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-			characterCard{baseCard: baseCard{id: guppy, name: "Guppy", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
-			characterCard{baseCard: baseCard{id: whoreOfBabylon, name: "Whore of Babylon", effect: characterEffect}, baseHealth: 2, baseAttack: 1, triggered: true},
+			characterCard{baseCard: baseCard{id: bumboCharacter, name: "Bum-Bo", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+			characterCard{baseCard: baseCard{id: darkJudas, name: "Dark Judas", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+			characterCard{baseCard: baseCard{id: guppy, name: "Guppy", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
+			characterCard{baseCard: baseCard{id: whoreOfBabylon, name: "Whore of Babylon", effect: characterEffect}, baseHealth: 2, baseAttack: 1, tapped: true},
 		)
 
 	}
@@ -975,7 +1039,7 @@ func getTreasureCards(useExpansionOne bool, useExpansionTwo bool) deck {
 		treasureCard{baseCard: baseCard{name: "Mini Mush", id: miniMush}, active: true, f: miniMushFunc},
 		treasureCard{baseCard: baseCard{name: "Modeling Clay", id: modelingClay}, active: true, f: modelingClayFunc},
 		treasureCard{baseCard: baseCard{name: "Mom's Bra", id: momsBra}, active: true, f: momsBraFunc},
-		treasureCard{baseCard: baseCard{name: "Mom's Shovel", id: momsShovel}, active: true, triggered: true, f: momsShovelFunc},
+		treasureCard{baseCard: baseCard{name: "Mom's Shovel", id: momsShovel}, active: true, tapped: true, f: momsShovelFunc},
 		treasureCard{baseCard: baseCard{name: "Monster Manual", id: monsterManual}, active: true, f: monsterManualFunc},
 		treasureCard{baseCard: baseCard{name: "Mr. Boom", id: mrBoom}, active: true, f: mrBoomFunc},
 		treasureCard{baseCard: baseCard{name: "Mystery Sack", id: mysterySack}, active: true, f: mysterySackFunc},

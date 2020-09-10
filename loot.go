@@ -10,7 +10,7 @@ Trinkets: They have no activation effect from the hand, they are added to the pl
 Broadly speaking there are two types of passive items:
 1) Event-based: Require some external event to occur prior to triggering its effect (dice roll, damage, start / end of turn)
 	- These effects will trigger upon some successfully resolved event
-	- Ex: board's roll variable being set, damage / death events prior to inflicting damage / death, start / end of turn
+	- Ex: board's roll variable being set, damage / deathPenalty events prior to inflicting damage / deathPenalty, start / end of turn
 2) Constant: Provides a constant game changing effect until the value leaves play
 
 Only event-based passive effects can be pushed to the stack and are not directly activated by
@@ -226,7 +226,7 @@ func butterBeanFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 			_ = b.eventStack.fizzle(node.next)
 		} else if _, ok := nextNodeEvent.(diceRollEvent); ok { // pills, high priestess, the d6
 			_ = b.eventStack.fizzle(node.next)
-		} else if _, ok := nextNodeEvent.(deathOfCharacterEvent); ok { // death tarot value
+		} else if _, ok := nextNodeEvent.(deathOfCharacterEvent); ok { // deathPenalty tarot value
 			_ = b.eventStack.fizzle(node.next)
 		}
 		_ = b.eventStack.fizzle(node)
@@ -282,7 +282,7 @@ func deathTarotCardFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 	l := len(players)
 	var i uint8
 	if l == 0 {
-		return f, false, errors.New("no live players for death tarot")
+		return f, false, errors.New("no live players for deathPenalty tarot")
 	} else if l > 1 {
 		showPlayers(players, 0)
 		i = uint8(readInput(0, l-1))
@@ -358,7 +358,7 @@ func goldBombFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 }
 
 // Basic Loot
-// If a Player would die, prevent that death and end that player's turn.
+// If a Player would die, prevent that deathPenalty and end that player's turn.
 // The blank card has no effect
 func holyCardFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 	deathEvents := b.eventStack.getDeathOfCharacterEvents()
@@ -446,7 +446,7 @@ func justiceFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 // The blank card has no effect.
 func lilBatteryFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 	var f lootCardEffect = func(roll uint8, blankCard bool) {
-		cards := p.getTriggeredActiveItems()
+		cards := p.getTappedActiveItems()
 		l := len(cards)
 		if l > 0 {
 			showTreasureCards(cards, p.Character.name, 0)
@@ -1075,7 +1075,7 @@ func bloodyPennyEvent(p *player, b *Board, lCard card, en *eventNode) (cardEffec
 }
 
 // Preventative event based passive
-// Each time you die, roll: 1-5: You Die. 6: Prevent death. If it was your turn, end it.
+// Each time you die, roll: 1-5: You Die. 6: Prevent deathPenalty. If it was your turn, end it.
 func brokenAnkhChecker(p *player) {}
 
 // Event based passive

@@ -1,36 +1,31 @@
 # "The Binding of Isaac: Four Souls", PC port.
+This work in progress is a dedicated PC port for the card game 
+[_The Binding of Isaac: Four Souls_](http://foursoulsspoiler.com/).
+I have not provided a license for this repository, therefore, if you are not the project's owner,
+you are only authorized to read and run this repository.
 
-This work in progress is a dedicated PC port for the card game "The Binding of Isaac: Four Souls."
+### Objective
+Create a one-for-one recreation of _Four Souls_ without compromising the game's 
+[rules](http://pop-life.com/foursouls/rule-book.php), while simultaneously automating several key, yet mundane,
+mechanics such as checking card activation requirements, rolling / applying dice rolls to card effects & battle, and
+card placement management.
 
-The project will be built out in stages. Current stage: 0.
+### Current Phase
+This project is not in a runnable state. The main goal at this point is to finish programming the basic rules of the game
+along with creating unit tests that ensure: 
+1) Each card in the base game works as intended
+2) Each type of event (starting a turn, battling a monster, rolling dice) will resolve as intended, independently
+of other events.
+3) The basic mechanics of the game (initiating an action, prompting players for a reaction, stacking events) work as
+intended.
 
-1) Build a local only version that relies on command line output to debug the game's mechanics.
+The game will exist as a CLI application until the project is as free as obvious bugs as can be. 
 
-2) Build a local only version with a simple UI (no animations, no effects)
+### Future plans
 
-3) Build a multiplayer server to enable network play with a front end. 
-
-4) Refine animations. 
-
-
-
-PASSIVE TRIGGER EVENTS
-0) LUCKY ROCK ONLY: Activating an item (resolvement)
-
-1) Start / End of your turn (resolvement)
-
-2) Damage to self / to monster (preventative and resolvement)
-
-3) Death of player / monster (preventative and resolvement)
-
-4) Rolling dice (resolvement)
-
-5) Intention to Attack a monster (resolvement)
-
-6) Declaring an attack (resolvement)
+Once the current phase is over: 
+1) Provide doc strings to each basic mechanic and event function (cards are already documented)
+2) Create the multiplayer server and test in a local environment (one game, two separate players) 
+3) Start work on the frontend (Typescript) and enable browser play.
 
 
-Damage and Death: 
-
-For cards like Guppy's Hairball, Broken Ankh, The Dead Cat, Guppy's Collar, and 1-UP that prevent damage / death events 
-from happening need to be handled differently.

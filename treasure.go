@@ -13,7 +13,7 @@ effects (pay cents, destroy items, discard a value)
 Broadly speaking there are two types of passive items:
 1) Event-based: Require some external event to occur prior to triggering its effect (dice roll, damage, start / end of turn)
 	- These effects will trigger upon some successfully resolved event
-	- Ex: board's roll variable being set, damage / death events prior to inflicting damage / death, start / end of turn
+	- Ex: board's roll variable being set, damage / deathPenalty events prior to inflicting damage / deathPenalty, start / end of turn
 2) Constant: Provides a constant game changing effect until the value leaves play
 	- These can be cards that alter the game's stats or change a normal behavior to something else
 	- Not all of the cards in the game will have an assigned / defined effect below
@@ -40,7 +40,7 @@ import (
 // All Monsters you attack gain +1 Dice Roll
 // When you die, before paying penalties, give this card to another Player
 //
-// The latter part of this effect is handled upon player death.
+// The latter part of this effect is handled upon player deathPenalty.
 func babyHauntFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
 	var err error
@@ -58,7 +58,7 @@ func batteryBumFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 		return nil, false, errors.New("not enough cents to pay")
 	}
 	p.loseCents(4)
-	items := p.getTriggeredActiveItems()
+	items := p.getTappedActiveItems()
 	l := len(items)
 	if l == 0 {
 		return nil, false, errors.New("no items have been tapped")
@@ -77,7 +77,7 @@ func batteryBumFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 func bellyButtonFuncEvent(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
 	var err error
-	if _, err = en.checkDamageToPlayer(p.Character.id); err == nil && p.Character.triggered {
+	if _, err = en.checkDamageToPlayer(p.Character.id); err == nil && p.Character.tapped {
 		fmt.Println("1) Recharge character value\n2) Do not.")
 		if uint8(readInput(1, 2)) == 1 {
 			f = func(roll uint8) { p.Character.recharge() }
@@ -421,7 +421,7 @@ func chargedBabyFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect
 	var f cardEffect
 	var err error
 	if err = en.checkDiceRoll(2); err == nil {
-		tappedItems := p.getTriggeredActiveItems()
+		tappedItems := p.getTappedActiveItems()
 		l := len(tappedItems)
 		if l > 0 {
 			fmt.Println("1) Recharge an item?\n2) Do nothing.")
@@ -813,7 +813,7 @@ func fingerFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, boo
 
 // Active Item
 // 1) Put all monsters not being attacked on the bottom of the monster deck.
-// 2) Put all shop items on the bottom of the monster deck.
+// 2) Put all shop items on the bottom of the treasure deck.
 func flushFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 	var f cardEffect = func(roll uint8) {
 		for _, zone := range b.monster.zones {
@@ -824,7 +824,7 @@ func flushFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 			}
 		}
 	}
-	buyItemEvents := b.eventStack.getDeclarePurchaseEvents()
+	buyItemEvents := b.eventStack.getIntentionToPurchaseEvents()
 	if len(buyItemEvents) == 0 {
 		fmt.Println("1) Put all active monsters not being attacked at the bottom of the monster deck.\n" +
 			"2) Put all shop items on the bottom of the Treasure Deck.")
@@ -1012,7 +1012,7 @@ func greedsGulletFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffec
 
 // Event based preventative passive
 // Each time you die, roll:
-// 1-3: Prevent death. If it was your turn, end it.
+// 1-3: Prevent deathPenalty. If it was your turn, end it.
 // 4-6: You die :(
 func guppysCollarFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect, bool, error) {
 	var f cardEffect
@@ -1497,13 +1497,14 @@ func payToPlayFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 }
 
 // Active Item
-// Copy the activated effect of any non-eternal *treasureCard in play.
+// Copy the activated effect of any non-eternal item in play.
 func placeboFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 	active := make([]*treasureCard, 0)
 	others := b.getOtherPlayers(p, false)
 	for _, o := range others {
 		active = append(active, o.getActiveItems(false)...)
 	}
+	active = append(active, p.getActiveItems(false)...)
 	l := len(active)
 	if l == 1 && active[0].id == placebo {
 		return nil, false, errors.New("no new effects to copy")
@@ -1511,9 +1512,10 @@ func placeboFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 	showTreasureCards(active, "board", 0)
 	ans := readInput(0, len(active)-1)
 	var f cardEffect = func(roll uint8) {
-		tcCopy := *active[ans]
-		tcCopy.id = tCard.getId()            // placebo
-		_ = b.activateActiveItem(p, &tcCopy) // Do not care for errors.
+		tempTc := treasureCard{baseCard: active[ans].baseCard, paid: active[ans].paid, active: true, f: active[ans].f}
+		tempTc.id = placebo
+		tempTc.activate(p, b)
+
 	}
 	return f, false, nil
 }
@@ -1689,7 +1691,7 @@ func sacredHeartFunc(p *player, b *Board, tCard card, en *eventNode) (cardEffect
 // Each time another player dies, you choose what items they destroy
 // Each time another player dies, you gain any loot or cents they lose.
 //
-// Helper to character death event
+// Helper to character deathPenalty event
 // Returns true if shadow triggers. False if does not.
 func shadowFunc(p *player, b *Board) bool {
 	var activated bool
@@ -1706,7 +1708,7 @@ func shadowFunc(p *player, b *Board) bool {
 		p.loseCents(1)
 		p2.gainCents(1)
 		showLootCards(p.Hand, p.Character.name, 0)
-		fmt.Println("Choose which value to discard")
+		fmt.Println("Choose which value to discard and add to your hand.")
 		p2.Hand = append(p2.Hand, p.popHandCard(uint8(readInput(0, len(p.Hand)-1))))
 	}
 	return activated
@@ -1956,7 +1958,7 @@ func techXFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 // Active Item
 // Recharge another Item
 func theBatteryFunc(p *player, b *Board, tCard card) (cardEffect, bool, error) {
-	items := p.getTriggeredActiveItems()
+	items := p.getTappedActiveItems()
 	showTreasureCards(items, p.Character.name, 0)
 	ans := readInput(0, len(items)-1)
 	var f cardEffect = func(roll uint8) { p.rechargeActiveItemById(items[ans].id) }
@@ -2137,7 +2139,17 @@ func theD4Func(p *player, b *Board, tCard card) (cardEffect, bool, error) {
 // Active Item
 // Force a Player to reroll any dice roll.
 func theD6Func(p *player, b *Board, tCard card) (cardEffect, bool, error) {
-	node := b.eventStack.diceItem()
+	var ans int
+	var node *eventNode
+	nodes := b.eventStack.getDiceRollEvents()
+	l := len(nodes)
+	if l > 0 {
+		if l > 1 {
+			showEvents(nodes)
+			ans = readInput(0, l-1)
+		}
+		node = nodes[ans]
+	}
 	if node == nil {
 		return nil, false, errors.New("no dice events to change")
 	}
@@ -2269,7 +2281,7 @@ func theHabitFuncEvent(p *player, b *Board, tCard card, en *eventNode) (cardEffe
 	if _, err = en.checkDamageToPlayer(p.Character.id); err == nil && checkActiveEffects(p.activeEffects, theHabit, true) {
 		fmt.Println("1) Recharge an item\n2) Do nothing.")
 		if readInput(1, 2) == 1 {
-			a := p.getTriggeredActiveItems()
+			a := p.getTappedActiveItems()
 			l := len(a)
 			var i uint8
 			if l > 0 {
