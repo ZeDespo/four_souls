@@ -26,6 +26,7 @@ The game will exist as a CLI application until the project is as free as obvious
 Once the current phase is over: 
 1) Provide doc strings to each basic mechanic and event function (cards are already documented)
 2) Create the multiplayer server and test in a local environment (one game, two separate players) 
-3) Start work on the frontend (Typescript) and enable browser play.
+3) Implement goroutines to lessen wait times for computationally expensive functions
+4) Start work on the frontend (Typescript) and enable browser play.
 
 
