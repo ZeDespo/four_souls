@@ -661,7 +661,7 @@ func theDevilFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 	l = len(items)
 	showItems(items, 0)
 	showTreasureCards(b.treasure.zones, "shop", l)
-	fmt.Println("Which value to steal?")
+	fmt.Println("Which card to steal?")
 	ans = uint8(readInput(0, l+len(b.treasure.zones)-1))
 	card = items[ans]
 	id, isPassive, f := card.getId(), card.isPassive(), func(roll uint8, blankCard bool) {}
@@ -674,9 +674,12 @@ func theDevilFunc(p *player, b *Board) (lootCardEffect, bool, error) {
 		}
 	} else {
 		f = func(roll uint8, blankCard bool) {
-			c, err := b.treasure.stealFromShop(id)
-			if err == nil {
-				p.addCardToBoard(c)
+			for i, c := range b.treasure.zones {
+				if c.id == id {
+					p.addCardToBoard(b.treasure.zones[i])
+					b.treasure.zones[i] = treasureCard{}
+					break
+				}
 			}
 		}
 	}

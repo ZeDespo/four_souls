@@ -129,8 +129,8 @@ func (p player) getAllItems(getEternal bool) []itemCard {
 	return items
 }
 
-func (b Board) getAllPassiveItems(getEternal bool) []*passiveItem {
-	items := make([]*passiveItem, 0)
+func (b Board) getAllPassiveItems(getEternal bool) []passiveItem {
+	items := make([]passiveItem, 0)
 	for _, p := range b.getPlayers(false) {
 		items = append(items, p.getPassiveItems(getEternal)...)
 	}
@@ -484,11 +484,11 @@ func (es eventStack) getPaidItemEvents() []*eventNode {
 	return nodes
 }
 
-func (p player) getPassiveItems(getEternal bool) []*passiveItem {
-	var cards = make([]*passiveItem, 0, len(p.PassiveItems))
+func (p player) getPassiveItems(getEternal bool) []passiveItem {
+	var cards = make([]passiveItem, 0, len(p.PassiveItems))
 	for i := range p.PassiveItems {
 		if getEternal || (!getEternal && !p.PassiveItems[i].isEternal()) {
-			c := &p.PassiveItems[i]
+			c := p.PassiveItems[i]
 			cards = append(cards, c)
 		}
 	}
@@ -525,9 +525,9 @@ func (p player) getPlayerActions(isActivePlayer bool, emptyEs bool) []actionReac
 	if _, err := p.getItemIndex(theresOptions, true); err == nil {
 		actions = append(actions, actionReaction{msg: "Peek at the Treasure deck", value: peekTheresOptions})
 	}
-	if isActivePlayer && !p.inBattle {
+	if isActivePlayer && !p.inBattle && p.numForcedDeckAttacks == 0 && !p.forceAttackOnAny && emptyEs {
 		actions = append(actions, actionReaction{msg: "End your turn", value: endActivePlayerTurn})
-	} else if !isActivePlayer {
+	} else if !isActivePlayer || (isActivePlayer && !emptyEs) {
 		actions = append(actions, actionReaction{msg: "Do nothing", value: doNothing})
 	}
 	return actions

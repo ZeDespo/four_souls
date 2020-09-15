@@ -38,24 +38,24 @@ type mArea struct {
 
 // Type representing the player's board: their character, all items they control, money, souls, and their hand
 type player struct {
-	Character         characterCard
-	ActiveItems       []treasureCard
-	PassiveItems      []passiveItem
-	Pennies           int8
-	Souls             []card // Character value (The Lost), tArea Cards, mArea Cards, Lost Soul loot value
-	Curses            []monsterCard
-	Hand              []lootCard
-	baseNumLootPlayed int8
-	baseNumPurchases  int8
-	baseNumAttacks    int8
-	numLootPlayed     int8 // The number of times we could play a loot card.
-	numPurchases      int8 // The number of time we could numPurchases an itemCard
-	numAttacks        int8 // The number of times a new monster can be attacked.
-	inBattle          bool // Is the unit in combat or not?
-	forceAttack       bool
-	forceAttackTarget map[int8]uint8 // Key = the attack target. Value = the number of attacks forced
-	forceEnd          bool           // Death, effects like Holy Card and The Beginning, can force an end to a turn.
-	activeEffects     map[uint16]struct{}
+	Character            characterCard
+	ActiveItems          []treasureCard
+	PassiveItems         []passiveItem
+	Pennies              int8
+	Souls                []card // Character value (The Lost), tArea Cards, mArea Cards, Lost Soul loot value
+	Curses               []monsterCard
+	Hand                 []lootCard
+	baseNumLootPlayed    int8
+	baseNumPurchases     int8
+	baseNumAttacks       int8
+	numLootPlayed        int8 // The number of times we could play a loot card.
+	numPurchases         int8 // The number of time we could numPurchases an itemCard
+	numAttacks           int8 // The number of times a new monster can be attacked.
+	inBattle             bool // Is the unit in combat or not?
+	forceAttackOnAny     bool // Determines if a player must attack SOME target
+	numForcedDeckAttacks int8 // If > 0, the player must attack the deck this many more times.
+	forceEnd             bool // Death, effects like Holy Card and The Beginning, can force an end to a turn.
+	activeEffects        map[uint16]struct{}
 }
 
 // The area of the board designated for the shop / treasure cards
@@ -68,8 +68,7 @@ type tArea struct {
 
 // Add a loot card (trinket), treasure card (active / passive) or a monster card (curse)
 // on the player's board.
-// For active and passive items, this method will sort the items to enable
-// binary search of items
+// TODO pass pointers to treasure cards all around to ensure pointer receivers
 func (p *player) addCardToBoard(c card) {
 	switch c.(type) {
 	case treasureCard:
@@ -123,7 +122,7 @@ func (b *Board) addMonsterToZone(i uint8) {
 
 // Helper function for adding an item card to the player's board.
 // This particular function will add an Active / Paid Item to the
-// player's board in a sorted manner.
+// player's board, then sort the slice.
 func (p *player) addNonPassiveItem(c treasureCard, dest []treasureCard) []treasureCard {
 	i := sort.Search(len(dest), func(i int) bool { return dest[i].id >= c.id })
 	dest = append(dest, treasureCard{})
@@ -134,7 +133,7 @@ func (p *player) addNonPassiveItem(c treasureCard, dest []treasureCard) []treasu
 
 // Helper function for adding an item card to the player's board.
 // This particular function will add a Passive Item to the
-// player's board in a sorted manner.
+// player's board, then sort the slice.
 func (p *player) addPassiveItem(c passiveItem, dest []passiveItem) []passiveItem {
 	i := sort.Search(len(dest), func(i int) bool { return dest[i].getId() >= c.getId() })
 	dest = append(dest, &treasureCard{})
@@ -185,14 +184,16 @@ func (p *player) beforePayingPenalties(b *Board) {
 	for i := range p.Curses {
 		b.discard(p.popCurse(uint8(i)))
 	}
-	for _, c := range p.getPassiveItems(false) {
-		switch c.getId() {
-		case babyHaunt:
-			b.hauntGiveAwayHelper(p, c)
-		case daddyHaunt:
-			b.hauntGiveAwayHelper(p, c)
-		case mamaHaunt:
-			b.hauntGiveAwayHelper(p, c)
+	hauntIds := [3]uint16{babyHaunt, daddyHaunt, mamaHaunt}
+	if len(p.PassiveItems) > 0 {
+		others := b.getOtherPlayers(p, false)
+		for _, id := range hauntIds {
+			if i, err := p.getItemIndex(id, true); err == nil {
+				showPlayers(others, 0)
+				fmt.Println("Who to give", p.PassiveItems[i].getName(), "to?")
+				target := others[i]
+				target.addCardToBoard(p.popPassiveItem(i))
+			}
 		}
 	}
 }
@@ -300,7 +301,7 @@ func (b *Board) damagePlayerToMonster(p *player, target *monsterCard, n uint8, c
 func (b *Board) damagePlayerToPlayer(p, target *player, n uint8) {
 	if !target.isDead() { // Not dead
 		b.eventStack.push(event{p: p, e: damageEvent{target: target, n: n}})
-		b.preventDamageHelper(p, b.eventStack.peek())
+		b.preventDamageHelper(target, b.eventStack.peek())
 	}
 }
 
@@ -430,13 +431,6 @@ func (b *Board) endPhase() {
 	}
 }
 
-func (p *player) forceAnAttack(addAttack bool) {
-	p.forceAttack = true
-	if addAttack {
-		p.numAttacks += 1
-	}
-}
-
 // Force the end of the active player's turn, and pop
 // any unresolved actions off the event stack.
 // Cards like The Fool and Holy Card will call this method.
@@ -549,11 +543,18 @@ func (p *player) makeChoice(b *Board) bool {
 		err := handCard.activate(p, b)
 		if err != nil {
 			fmt.Println(fmt.Sprintf("Could not activate %s:\n%s.", handCard.name, err))
+		} else {
+			p.numLootPlayed -= 1
 		}
 	case buyItem:
 		b.eventStack.push(event{p: p, e: intentionToPurchaseEvent{}})
+		p.numPurchases -= 1
 	case attackMonster:
-		if p.inBattle && p.isActivePlayer(b) {
+		if !p.inBattle && p.isActivePlayer(b) && p.numForcedDeckAttacks > 0 {
+			p.numForcedDeckAttacks -= 1
+			b.eventStack.push(event{p: p, e: intentionToAttackEvent{m: nil}}) // nil = attack monster deck
+			p.numAttacks -= 1
+		} else if !p.inBattle && p.isActivePlayer(b) {
 			monsters := b.monster.getActiveMonsters()
 			l := len(monsters)
 			showMonsterCards(monsters, 0)
@@ -566,6 +567,8 @@ func (p *player) makeChoice(b *Board) bool {
 				m = nil // Attack the deck instead
 			}
 			b.eventStack.push(event{p: p, e: intentionToAttackEvent{m: m}})
+			p.forceAttackOnAny = false
+			p.numAttacks -= 1
 		} else {
 			b.eventStack.push(event{p: p, e: declareAttackEvent{m: b.monster.getActiveMonsterInBattle()}})
 			b.rollDiceAndPush()
@@ -749,8 +752,9 @@ func (mc *monsterCard) resetStats() {
 // Set the player's and character's values back to their base values,
 // free of any buffs or nerfs to any stats.
 func (p *player) resetStats(isActivePlayer bool) {
-	p.forceEnd = false
+	p.forceEnd, p.forceAttackOnAny = false, false
 	p.numAttacks, p.numPurchases, p.numLootPlayed = p.baseNumAttacks, p.baseNumPurchases, p.baseNumLootPlayed
+	p.numForcedDeckAttacks = 0
 	c := &p.Character
 	c.tapped = false
 	c.hp, c.ap = c.baseHealth, c.baseAttack
@@ -799,19 +803,6 @@ func (b *Board) rollDiceAndPush() {
 	b.eventStack.push(event)
 }
 
-func (t *tArea) stealFromShop(id uint16) (treasureCard, error) {
-	var tc treasureCard
-	var err = errors.New("itemCard does not exist in the shop")
-	for i, c := range t.zones {
-		if c.id == id {
-			tc, err = t.zones[i], nil
-			t.zones[i] = treasureCard{baseCard: baseCard{id: 0}}
-			break
-		}
-	}
-	return tc, err
-}
-
 func (p *player) stealItem(id uint16, isPassive bool, p2 *player) {
 	j, err := p2.getItemIndex(id, isPassive)
 	if err == nil {
@@ -822,107 +813,6 @@ func (p *player) stealItem(id uint16, isPassive bool, p2 *player) {
 func check(err error) {
 	if err != nil {
 		panic(err)
-	}
-}
-
-// Start a new game by doing the following:
-// 1) Set up the decks and place them on the board
-// 2) Initialize each player's characters
-// 3) Give the players three loot cards for their hand
-// 4) Place two monsters on the board's monster zone. All other cards will go on the bottom of the deck.
-// 5) Place two treasure items on the board's treasure zone.
-func NewGame(numPlayers uint8, useKickStarterExpansion bool, useFourSoulsExpansion bool) Board {
-	rand.Seed(time.Now().UnixNano())
-	lootDeck := getLootDeck(useKickStarterExpansion, useFourSoulsExpansion)
-	monsterDeck := getMonsterDeck(useKickStarterExpansion, useFourSoulsExpansion)
-	treasureDeck := getTreasureDeck(useKickStarterExpansion, useFourSoulsExpansion)
-	board := Board{
-		loot: &lArea{deck: lootDeck, discardPile: make(deck, 0, lootDeck.len())},
-		monster: &mArea{deck: monsterDeck, discardPile: make(deck, 0, monsterDeck.len()),
-			zones: make([]activeSlot, 2, 6)},
-		treasure: &tArea{deck: treasureDeck, discardPile: make(deck, 0, treasureDeck.len()),
-			zones: make([]treasureCard, 2, 4), crystalBallGuess: make(map[*player]uint8, 3)},
-	}
-	players := setPlayerBoards(numPlayers, useKickStarterExpansion, useFourSoulsExpansion)
-	for i := range players {
-		var j uint8
-		for j = 0; j < 3; j++ {
-			players[i].loot(board.loot)
-		}
-	}
-	board.players = players
-	var i uint8
-	for i < 2 {
-		m := board.monster.draw()
-		if m.isBonusCard() {
-			board.monster.placeInDeck(m, false)
-		} else {
-			m.resetStats()
-			board.monster.zones[i].push(m)
-			i += 1
-		}
-	}
-	for i = 0; i < 2; i++ {
-		board.treasure.zones[i] = board.treasure.draw()
-	}
-	return board
-}
-
-func (b *Board) attackMonsterDeck() {
-	//ap := &b.players[b.api]
-	//m := b.monster.draw()
-	//fmt.Println("Drew ", m.name)
-	//panic()
-	//if !m.isBonusCard() {
-	//
-	//}
-
-}
-
-// Create a single player game that will test the game's mechanics in a single player state.
-// This is to test the functionality of the game as a whole rather than the effects of cards.
-// There's only one modification for the game's rules: if the player dies three times, the game ends.
-// All of the outputs here will take place on the command line only.
-func (b *Board) DebugGame() {
-	numPlayers := uint8(len(b.players))
-	victors := make([]player, 0, numPlayers)
-	for len(victors) == 0 {
-		ap := &b.players[b.api]
-		if checkActiveEffects(ap.activeEffects, famine, true) { // skip the player's next turn
-			b.api = (b.api + 1) % numPlayers
-			continue
-		}
-		if ap.forceAttack && !ap.inBattle {
-			if checkActiveEffects(ap.activeEffects, portal, true) {
-				b.attackMonsterDeck()
-			}
-		}
-		for target, numTimes := range ap.forceAttackTarget {
-			numTimes -= 1
-			if numTimes == 0 {
-				delete(ap.forceAttackTarget, target)
-			} else {
-				ap.forceAttackTarget[target] = numTimes
-			}
-			if target == forceAttackDeck {
-				b.attackMonsterDeck()
-			} else {
-				// TODO
-			}
-		}
-		actions := ap.getPlayerActions(true, true)
-		for i, a := range actions {
-			fmt.Println(i, ") ", a.msg)
-		}
-		fmt.Println("What would you like to do?")
-		switch actions[readInput(0, len(actions))].value {
-		case playLootCard:
-			fmt.Println()
-		case buyItem:
-			fmt.Println()
-		}
-		chainCards(ap, b)
-		b.api = (b.api + 1) % numPlayers
 	}
 }
 
@@ -1003,4 +893,62 @@ func setPlayerBoards(numPlayers uint8, useKickstarterExpansion bool, useFourSoul
 		players[i] = player
 	}
 	return players
+}
+
+func (b *Board) DebugGame() {
+	numPlayers := uint8(len(b.players))
+	victors := make([]player, 0, numPlayers)
+	for len(victors) == 0 {
+		ap := &b.players[b.api]
+		_ = ap.makeChoice(b)
+		for !b.eventStack.isEmpty() {
+			err := b.resolveNextEvent()
+			if err != nil {
+				fmt.Println(fmt.Errorf("error resolving event: %s", err))
+			}
+		}
+	}
+}
+
+// Start a new game by doing the following:
+// 1) Set up the decks and place them on the board
+// 2) Initialize each player's characters
+// 3) Give the players three loot cards for their hand
+// 4) Place two monsters on the board's monster zone. All other cards will go on the bottom of the deck.
+// 5) Place two treasure items on the board's treasure zone.
+func NewGame(numPlayers uint8, useKickStarterExpansion bool, useFourSoulsExpansion bool) Board {
+	rand.Seed(time.Now().UnixNano())
+	lootDeck := getLootDeck(useKickStarterExpansion, useFourSoulsExpansion)
+	monsterDeck := getMonsterDeck(useKickStarterExpansion, useFourSoulsExpansion)
+	treasureDeck := getTreasureDeck(useKickStarterExpansion, useFourSoulsExpansion)
+	board := Board{
+		loot: &lArea{deck: lootDeck, discardPile: make(deck, 0, lootDeck.len())},
+		monster: &mArea{deck: monsterDeck, discardPile: make(deck, 0, monsterDeck.len()),
+			zones: make([]activeSlot, 2, 6)},
+		treasure: &tArea{deck: treasureDeck, discardPile: make(deck, 0, treasureDeck.len()),
+			zones: make([]treasureCard, 2, 4), crystalBallGuess: make(map[*player]uint8, 3)},
+	}
+	players := setPlayerBoards(numPlayers, useKickStarterExpansion, useFourSoulsExpansion)
+	for i := range players {
+		var j uint8
+		for j = 0; j < 3; j++ {
+			players[i].loot(board.loot)
+		}
+	}
+	board.players = players
+	var i uint8
+	for i < 2 {
+		m := board.monster.draw()
+		if m.isBonusCard() {
+			board.monster.placeInDeck(m, false)
+		} else {
+			m.resetStats()
+			board.monster.zones[i].push(m)
+			i += 1
+		}
+	}
+	for i = 0; i < 2; i++ {
+		board.treasure.zones[i] = board.treasure.draw()
+	}
+	return board
 }

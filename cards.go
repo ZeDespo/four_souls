@@ -53,7 +53,7 @@ type characterCard struct {
 type activator func(p *player, b *Board, c card) (cardEffect, bool, error)
 
 // A generic card effect to be pushed onto the event stack
-// and resolve some card.
+// and resolveNextEvent some card.
 type cardEffect func(roll uint8)
 
 type continuousActivator func(p *player, b *Board, c card, isLeaving bool)
@@ -62,7 +62,7 @@ type eventActivator func(p *player, b *Board, c card, en *eventNode) (cardEffect
 
 // Identical to generic activator; however, a loot card's effect can change at the
 // resolving step due to Blank Card (Double the effect of the next loot card you play).
-// Therefore, loot cards must resolve on the stack with a special function type
+// Therefore, loot cards must resolveNextEvent on the stack with a special function type
 type lootActivator func(p *player, b *Board) (lootCardEffect, bool, error)
 
 type lootCard struct {
@@ -74,7 +74,7 @@ type lootCard struct {
 	cf      continuousActivator
 }
 
-// A loot card effect to be pushed onto the stack and resolve some
+// A loot card effect to be pushed onto the stack and resolveNextEvent some
 // loot card.
 //
 // blankCard bool: If the player activated Blank Card, then the effects

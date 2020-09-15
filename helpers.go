@@ -136,16 +136,19 @@ func (m *mArea) fillMonsterZone(ap *player, b *Board, i uint8) {
 // Helper for the "Baby/Daddy/Mama Haunt" card.
 // Before paying penalties, give this card to another player.
 // Choose the player, then give them the card.
-func (b Board) hauntGiveAwayHelper(p *player, hauntCard itemCard) {
-	others := b.getOtherPlayers(p, false)
-	l := len(others)
-	var i uint8
-	if l > 1 {
-		showPlayers(others, 0)
-		fmt.Println(fmt.Sprintf("Which player should get %s?", hauntCard.getName()))
-		i = uint8(readInput(0, l-1))
+func (b *Board) hauntGiveAwayHelper(p *player, hauntCard itemCard) {
+	hauntIds := [3]uint16{babyHaunt, daddyHaunt, mamaHaunt}
+	if len(p.PassiveItems) > 0 {
+		others := b.getOtherPlayers(p, false)
+		for _, id := range hauntIds {
+			if i, err := p.getItemIndex(id, true); err == nil {
+				showPlayers(others, 0)
+				fmt.Println("Who to give", p.PassiveItems[i].getName(), "to?")
+				target := others[i]
+				target.addCardToBoard(p.popPassiveItem(i))
+			}
+		}
 	}
-	others[i].stealItem(hauntCard.getId(), hauntCard.isPassive(), p)
 }
 
 func (b *Board) incubus(p, p2 *player) cardEffect {
@@ -306,6 +309,34 @@ func (es *eventStack) preventDamageWithLootHelper(damageEvents []*eventNode, n u
 		}
 		_ = es.preventDamage(n, damageEvents[i])
 	}
+}
+
+// For cards that can be activated on more than one type of event.
+func mergeEventSlices(a []*eventNode, b []*eventNode) []*eventNode {
+	var i, j, k int
+	var l1, l2 = len(a), len(b)
+	c := make([]*eventNode, l1+l2, l1+l2)
+	for i < l1 && j < l2 {
+		if a[i].id < b[j].id {
+			c[k] = a[i]
+			i += 1
+		} else {
+			c[k] = b[j]
+			j += 1
+		}
+		k += 1
+	}
+	for i < l1 {
+		c[k] = a[i]
+		k += 1
+		i += 1
+	}
+	for j < l2 {
+		c[k] = b[j]
+		k += 1
+		j += 1
+	}
+	return c
 }
 
 func modifyAttack(p *player, n uint8, leavingField bool) {

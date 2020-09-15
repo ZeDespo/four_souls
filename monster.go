@@ -441,9 +441,8 @@ func portalDeath(p *player, b *Board, mCard card) (cardEffect, bool, error) {
 	var err = errors.New("not the active player")
 	if p.Character.id == b.players[b.api].Character.id {
 		err, f = nil, func(roll uint8) {
-			p.forceAttack = true
+			p.forceAttackOnAny = true
 			p.numAttacks += 1
-			p.activeEffects[portal] = struct{}{}
 		}
 	}
 	return f, false, err
@@ -801,7 +800,8 @@ func chubReward(b *Board) (cardEffect, bool) {
 func conquestDeath(p *player, b *Board, mCard card) (cardEffect, bool, error) {
 	return func(roll uint8) {
 		ap := &b.players[b.api]
-		ap.forceAnAttack(true)
+		ap.numAttacks += 1
+		ap.forceAttackOnAny = true
 	}, false, nil
 }
 
@@ -898,7 +898,9 @@ func envyDeath(p *player, b *Board, mCard card) (cardEffect, bool, error) {
 	var f cardEffect
 	err := errors.New("not the active player")
 	if p.Character.id == b.players[b.api].Character.id {
-		err, f = nil, func(roll uint8) { p.forceAnAttack(true) }
+		err, f = nil, func(roll uint8) {
+			p.forceAttackOnAny = true
+		}
 	}
 	return f, false, err
 }
@@ -1395,7 +1397,7 @@ func ambushFunc(ap *player, b *Board, mCard card) (cardEffect, bool, error) {
 		} else {
 			ap.numAttacks += 2
 		}
-		ap.forceAttackTarget[forceAttackDeck] = 2
+		ap.numForcedDeckAttacks += 2
 	}
 	return f, false, nil
 }

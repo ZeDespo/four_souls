@@ -33,7 +33,7 @@ func showDeck(cards deck, reverse bool) {
 }
 
 func showEvents(events []*eventNode) {
-	var s = "Events (in resolve order).\n"
+	var s = "Events (in resolveNextEvent order).\n"
 	s += headerEventStack()
 	for i, e := range events {
 		s += e.showEvent(i)

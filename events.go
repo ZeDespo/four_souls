@@ -156,7 +156,7 @@ func (b *Board) checkPlayerPassives(en *eventNode, startOrEndOfTurn bool) []even
 	return events
 }
 
-func (b *Board) resolve() error {
+func (b *Board) resolveNextEvent() error {
 	err := errors.New("no eventNode on stack")
 	es := &b.eventStack
 	triggeredEvents := make([]event, 0)
@@ -217,9 +217,15 @@ func (b *Board) resolve() error {
 			for _, p := range b.getPlayers(true) {
 				p.resetStats(p.isActivePlayer(b))
 			}
-			b.api = (b.api + 1) % uint8(len(b.players))
 			triggeredEvents = append(triggeredEvents, b.checkPlayerPassives(node, true)...)
 			triggeredEvents = append(triggeredEvents, b.checkCursePassives(node)...)
+			if !checkActiveEffects(p.activeEffects, theSun, true) { // Player gains extra turn
+				b.api = (b.api + 1) % uint8(len(b.players))
+			} else {
+				if checkActiveEffects(b.players[b.api].activeEffects, famine, true) { // Skip that player's turn
+					b.api = (b.api + 1) % uint8(len(b.players))
+				}
+			}
 		case intentionToAttackEvent:
 			e := ev.(intentionToAttackEvent)
 			p.numAttacks -= 1

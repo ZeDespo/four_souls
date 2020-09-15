@@ -712,7 +712,7 @@ func donationMachineFunc(p *player, b *Board, tCard card) (cardEffect, bool, err
 // Constant with conditions passive item
 // All damage done to you is reduced to 1.
 //
-// This card's effect will resolve when the player who owns the card
+// This card's effect will resolveNextEvent when the player who owns the card
 // takes damage.
 func dryBabyFunc(p *player) bool {
 	var b bool
